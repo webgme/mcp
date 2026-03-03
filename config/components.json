@@ -1,0 +1,9 @@
+{
+  "GenericUIFooterControlsPanel": {
+    "extraWidgets": {
+      "GMEBotWidget": {
+        "path": "widgets/GMEBot/Widget"
+      }
+    }
+  }
+}

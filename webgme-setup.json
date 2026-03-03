@@ -1,0 +1,34 @@
+{
+  "components": {
+    "addons": {},
+    "decorators": {},
+    "layouts": {},
+    "plugins": {},
+    "routers": {
+      "cback": {
+        "src": "src/routers/cback",
+        "test": "test/routers/cback",
+        "mount": "cback"
+      }
+    },
+    "seeds": {},
+    "visualizers": {
+      "GMEBot": {
+        "src": "panels/GMEBot/GMEBotPanel",
+        "title": "GMEBot",
+        "panel": "src/visualizers/panels/GMEBot",
+        "secondary": false,
+        "widget": "src/visualizers/widgets/GMEBot"
+      }
+    }
+  },
+  "dependencies": {
+    "addons": {},
+    "decorators": {},
+    "layouts": {},
+    "plugins": {},
+    "routers": {},
+    "seeds": {},
+    "visualizers": {}
+  }
+}

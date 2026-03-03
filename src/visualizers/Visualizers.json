@@ -1,0 +1,8 @@
+[
+  {
+    "id": "GMEBot",
+    "title": "GMEBot",
+    "panel": "panels/GMEBot/GMEBotPanel",
+    "DEBUG_ONLY": false
+  }
+]

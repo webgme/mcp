@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke-linejoin="round">
+  <defs>
+    <linearGradient id="metallicGrey" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#d8dce0"/>
+      <stop offset="50%" stop-color="#b8bcc0"/>
+      <stop offset="100%" stop-color="#989ca0"/>
+    </linearGradient>
+    <filter id="faceShadow" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0.25" dy="0.4" stdDeviation="0.35" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+  <!-- Metallic grey container with 3D shadow -->
+  <path d="M12 2 L20 5 L20 17.5 L12 22 L4 17.5 L4 5 Z" fill="url(#metallicGrey)" stroke="url(#metallicGrey)" stroke-width="1.4" filter="url(#faceShadow)"/>
+  <!-- Upper left: blue hexagon (closer to center), black eyeball centered in hexagon -->
+  <path d="M8 5.2 L11 7 L11 10.8 L8 12.6 L5 10.8 L5 7 Z" stroke="#337ab7" stroke-width="1.2"/>
+  <circle cx="8" cy="8.9" r="1.5" fill="#000"/>
+  <rect x="6.5" y="8.6" width="3" height="0.6" fill="url(#metallicGrey)"/>
+  <circle cx="8" cy="8.9" r="1.5" fill="none" stroke="#000" stroke-width="0.2"/>
+  <!-- Upper right: green hexagon (closer to center), black eyeball -->
+  <path d="M16 5.2 L19 7 L19 10.8 L16 12.6 L13 10.8 L13 7 Z" stroke="#5cb85c" stroke-width="1.2"/>
+  <circle cx="16" cy="8.9" r="1.5" fill="#000"/>
+  <rect x="14.5" y="8.6" width="3" height="0.6" fill="url(#metallicGrey)"/>
+  <circle cx="16" cy="8.9" r="1.5" fill="none" stroke="#000" stroke-width="0.2"/>
+  <!-- Lower: red hexagon (same size as eyes), mouth centered in hexagon -->
+  <path d="M12 12.8 L15 14.6 L15 18.4 L12 20.2 L9 18.4 L9 14.6 Z" stroke="#d9534f" stroke-width="1.2"/>
+  <rect x="10.2" y="15.5" width="3.6" height="2" stroke="#000" stroke-width="0.7" fill="none"/>
+  <line x1="10.4" y1="15.5" x2="10.4" y2="17.5" stroke="#000" stroke-width="0.25"/>
+  <line x1="11.2" y1="15.5" x2="11.2" y2="17.5" stroke="#000" stroke-width="0.25"/>
+  <line x1="12" y1="15.5" x2="12" y2="17.5" stroke="#000" stroke-width="0.25"/>
+  <line x1="12.8" y1="15.5" x2="12.8" y2="17.5" stroke="#000" stroke-width="0.25"/>
+  <line x1="13.6" y1="15.5" x2="13.6" y2="17.5" stroke="#000" stroke-width="0.25"/>
+</svg>

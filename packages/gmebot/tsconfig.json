@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2019",
+    "module": "amd",
+    "moduleResolution": "node",
+    "outDir": "../../src/visualizers/widgets/GMEBot",
+    "rootDir": "src",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": false
+  },
+  "include": [
+    "src/**/*.ts"
+  ]
+}

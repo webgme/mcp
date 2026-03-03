@@ -1,0 +1,15 @@
+{
+  "name": "webgme-cback",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WebGME cback router package.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "node -e \"require('fs').rmSync('../../src/routers/cback/cback.js',{force:true})\""
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.5.2",
+    "typescript": "^5.9.2"
+  }
+}
