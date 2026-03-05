@@ -31,6 +31,8 @@ export const DEFAULT_CONFIG: OllamaConfig = {
 export interface ChatCompletionResult {
     message: ChatMessage;
     done: boolean;
+    /** When the API reports it (Groq, OpenAI, Anthropic). */
+    usage?: { prompt_tokens: number; completion_tokens: number; total_tokens?: number };
 }
 
 /**

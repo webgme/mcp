@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.NODE_TOOLS = exports.clearRegistry = exports.getRegistry = exports.setRegistry = exports.clearAttribute = exports.getAttribute = exports.setAttribute = exports.getPropertyNames = exports.findNodesByName = exports.deleteNode = exports.moveNode = exports.createNode = void 0;
+exports.NODE_TOOLS = exports.getDiagramLayout = exports.bulkSet = exports.clearRegistry = exports.getRegistry = exports.setRegistry = exports.clearAttribute = exports.getAttribute = exports.setAttribute = exports.getPropertyNames = exports.findNodesByName = exports.deleteNode = exports.moveNode = exports.createNode = void 0;
 const tools_1 = require("../tools");
 const DEFAULT_BASE_TYPE = "FCO";
 const PATH_SEP = "/";
@@ -45,9 +45,10 @@ function formatPropertyValue(val) {
 exports.createNode = {
     definition: {
         name: "createNode",
-        description: "Create a new node in the WebGME model (server-side). No arguments are required. " +
-            "When the user says 'create a node' or 'add a node' without specifying type or parent, call createNode with an empty object {} — do NOT ask the user for type or parent; the backend uses defaults (current selection or root as parent, FCO as type). " +
-            "Only pass container or baseType when the user explicitly specifies a parent path or a type. Never pass projectId as container. " +
+        description: "Create a new node in the WebGME model (server-side). Use this only for creating *instance* nodes in the model, not for defining new concepts. " +
+            "When the user asks to create a 'concept', 'meta concept', 'type', or 'metamodel element', use createMetaNode instead, not createNode. " +
+            "No arguments are required. When the user says 'create a node' or 'add a node' without specifying type or parent, call createNode with an empty object {} — do NOT ask the user for type or parent; the backend uses defaults (current selection or root as parent, FCO as type). " +
+            "Only pass container or baseType when the user explicitly specifies a parent path or a type. baseType must be FCO or an existing node path (from findNodesByName or getMetaInfo); do not invent type names that do not exist in the project. Never pass projectId as container. " +
             "FCO means First Class Object (not Foundation Class Object). " +
             "The tool returns nodePath (the node's path, e.g. '/1' or '/1/2'). Paths are project-specific; the FCO is typically at '/1', root at '/'. Do not assume or guess paths — use only paths returned by tools (createNode, findNodesByName, getPropertyNames). nodePath is an identifier, NOT the node's name.",
         parameters: {
@@ -55,7 +56,7 @@ exports.createNode = {
             properties: {
                 baseType: {
                     type: "string",
-                    description: "Optional. Omit unless user specifies a type. Default is FCO (First Class Object).",
+                    description: "Optional. Omit unless user specifies a type. Must be FCO or an existing node path (e.g. from findNodesByName or getMetaInfo); do not invent type names.",
                 },
                 container: {
                     type: "string",
@@ -783,16 +784,162 @@ exports.clearRegistry = {
         };
     },
 };
+/**
+ * Bulk-set attributes and registry entries on multiple nodes, then commit once.
+ * Use this to apply layout or other multi-node changes in a single commit (e.g. after getDiagramLayout).
+ * Each node is loaded by path; attributes and registry are applied in turn. One commit at the end.
+ */
+exports.bulkSet = {
+    definition: {
+        name: "bulkSet",
+        description: "Set attributes and registry entries on multiple nodes in one go, then save and commit once. " +
+            "Use after getDiagramLayout when the user asks to arrange or layout nodes: pass the node paths with the new positions (and optionally other attributes/registry). " +
+            "Each item in nodes has path (node path), and optionally attributes (name→value) and registry (name→value). " +
+            "Registry values that are objects (e.g. position) can be passed as JSON strings or objects. One commit after all changes.",
+        parameters: {
+            type: "object",
+            properties: {
+                nodes: {
+                    type: "array",
+                    description: "Array of { path: string, attributes?: Record<string, string>, registry?: Record<string, value> }. path is the node path (e.g. '/1' or '/1/2').",
+                    items: {
+                        type: "object",
+                        properties: {
+                            path: { type: "string", description: "Node path." },
+                            attributes: {
+                                type: "object",
+                                description: "Attribute name → value (string).",
+                                additionalProperties: { type: "string" },
+                            },
+                            registry: {
+                                type: "object",
+                                description: "Registry name → value (string or object, e.g. position: { x, y }).",
+                                additionalProperties: true,
+                            },
+                        },
+                        required: ["path"],
+                    },
+                },
+            },
+            required: ["nodes"],
+        },
+    },
+    handler: async (args, ctx) => {
+        if (!ctx.coreSession) {
+            return {
+                data: {
+                    error: "Project context is required for bulkSet. The client must send projectId (and optionally branchName) in the request context.",
+                },
+            };
+        }
+        const nodesArg = args.nodes;
+        if (!Array.isArray(nodesArg) || nodesArg.length === 0) {
+            return { data: { error: "nodes must be a non-empty array of { path, attributes?, registry? }." } };
+        }
+        const { core, root } = ctx.coreSession;
+        const errors = [];
+        const updated = [];
+        try {
+            for (const item of nodesArg) {
+                const path = (item === null || item === void 0 ? void 0 : item.path) != null ? String(item.path).trim() : "";
+                const pathNorm = path === "" || path === "/" ? "" : (path.charAt(0) === "/" ? path : "/" + path);
+                const node = pathNorm === "" ? root : await core.loadByPath(root, pathNorm);
+                if (!node) {
+                    errors.push("Node not found: " + (path || "(root)"));
+                    continue;
+                }
+                const nodePath = core.getPath(node);
+                if (item.attributes && typeof item.attributes === "object") {
+                    for (const [name, value] of Object.entries(item.attributes)) {
+                        if (name === undefined || value === undefined)
+                            continue;
+                        const res = core.setAttribute(node, name, String(value));
+                        if (res) {
+                            errors.push(toDisplayPath(nodePath) + " setAttribute(" + name + "): " + (res.message || String(res)));
+                        }
+                    }
+                }
+                if (item.registry && typeof item.registry === "object") {
+                    for (const [name, value] of Object.entries(item.registry)) {
+                        if (name === undefined)
+                            continue;
+                        let valueToSet = value;
+                        const currentVal = core.getRegistry(node, name);
+                        if (currentVal !== undefined && currentVal !== null && typeof currentVal === "object" && typeof value === "string") {
+                            try {
+                                valueToSet = JSON.parse(value);
+                            }
+                            catch {
+                                valueToSet = value;
+                            }
+                        }
+                        const res = core.setRegistry(node, name, valueToSet);
+                        if (res) {
+                            errors.push(toDisplayPath(nodePath) + " setRegistry(" + name + "): " + (res.message || String(res)));
+                        }
+                    }
+                }
+                updated.push(toDisplayPath(nodePath));
+            }
+            if (errors.length > 0 && updated.length === 0) {
+                return { data: { error: errors.join("; ") } };
+            }
+            await (0, tools_1.commitCoreSession)(ctx.coreSession, "GMEBot: bulkSet");
+            return {
+                data: {
+                    committed: true,
+                    updated,
+                    ...(errors.length > 0 ? { warnings: errors } : {}),
+                },
+            };
+        }
+        catch (e) {
+            ctx.logger.warn("bulkSet failed: " + (e && e.message));
+            return { data: { error: (e && e.message) || String(e) } };
+        }
+    },
+};
+/**
+ * Get the current diagram layout (node/concept positions and optional dimensions) for the active diagram.
+ * Works for both model diagram and meta diagram: layout is collected from whichever visualizer is active.
+ * Layout is only available on the client. If context.diagramLayout is not set, returns needClientData
+ * so the client will send a continuation request with the layout.
+ */
+exports.getDiagramLayout = {
+    definition: {
+        name: "getDiagramLayout",
+        description: "Get the layout of the current diagram: node or concept paths (actual WebGME paths) with positions (x, y) and optional dimensions (width, height). " +
+            "When available, also returns connections (sourcePath, targetPath) for connectivity. Works for both model and meta editor; layout is taken from the active visualizer. " +
+            "Use when the user asks to arrange, align, or layout. Layout is collected from the client; if not yet available, the backend will request it and continue automatically.",
+        parameters: {
+            type: "object",
+            properties: {},
+            required: [],
+        },
+    },
+    handler: async (_args, ctx) => {
+        var _a;
+        const layout = (_a = ctx.context) === null || _a === void 0 ? void 0 : _a.diagramLayout;
+        if (layout && Array.isArray(layout.nodes)) {
+            return { data: { diagramLayout: layout } };
+        }
+        return {
+            data: { needClientData: tools_1.NEED_CLIENT_DATA_KEYS.diagramLayout },
+        };
+    },
+};
 exports.NODE_TOOLS = [
     exports.createNode,
     exports.moveNode,
     exports.deleteNode,
     exports.findNodesByName,
     exports.getPropertyNames,
+    exports.getDiagramLayout,
     exports.setAttribute,
     exports.getAttribute,
     exports.clearAttribute,
     exports.setRegistry,
     exports.getRegistry,
     exports.clearRegistry,
+    exports.bulkSet,
 ];

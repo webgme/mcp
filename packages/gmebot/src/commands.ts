@@ -40,6 +40,10 @@ function loadNode(
 
 const HANDLERS: Record<string, CommandHandler> = {
     switchProject: cmdSwitchProject,
+    createBranch: cmdCreateBranch,
+    switchBranch: cmdSwitchProject,
+    deleteBranch: cmdDeleteBranch,
+    squashBranch: cmdSquashBranch,
     createNode: cmdCreateNode,
     moveNode: cmdMoveNode,
     deleteNode: cmdDeleteNode,
@@ -74,6 +78,73 @@ function cmdSwitchProject(
             return;
         }
         log("GMEBot", "Switched to " + label);
+    });
+}
+
+function cmdCreateBranch(
+    args: Record<string, any>,
+    client: any,
+    log: Logger
+): void {
+    const projectId: string = args.projectId;
+    const branchName: string = args.branchName;
+    const fromCommitHash: string = args.fromCommitHash;
+    if (!client || !projectId || !branchName || !fromCommitHash) {
+        log("GMEBot", "[createBranch: missing client, projectId, branchName, or fromCommitHash]");
+        return;
+    }
+    log("GMEBot", "Creating branch '" + branchName + "' from commit " + fromCommitHash + "...");
+    client.createBranch(projectId, branchName, fromCommitHash, function (err: any) {
+        if (err) {
+            log("GMEBot", "[createBranch failed: " + err.message + "]");
+            return;
+        }
+        log("GMEBot", "Branch '" + branchName + "' created.");
+    });
+}
+
+function cmdDeleteBranch(
+    args: Record<string, any>,
+    client: any,
+    log: Logger
+): void {
+    const projectId: string = args.projectId;
+    const branchName: string = args.branchName;
+    const branchHash: string = args.branchHash;
+    if (!client || !projectId || !branchName || !branchHash) {
+        log("GMEBot", "[deleteBranch: missing client, projectId, branchName, or branchHash]");
+        return;
+    }
+    log("GMEBot", "Deleting branch '" + branchName + "'...");
+    client.deleteBranch(projectId, branchName, branchHash, function (err: any) {
+        if (err) {
+            log("GMEBot", "[deleteBranch failed: " + err.message + "]");
+            return;
+        }
+        log("GMEBot", "Branch '" + branchName + "' deleted.");
+    });
+}
+
+function cmdSquashBranch(
+    args: Record<string, any>,
+    client: any,
+    log: Logger
+): void {
+    const projectId: string = args.projectId;
+    const branchName: string = args.branchName;
+    const fromCommitId: string = args.fromCommitId;
+    const message: string | undefined = args.message;
+    if (!client || !projectId || !branchName || !fromCommitId) {
+        log("GMEBot", "[squashBranch: missing client, projectId, branchName, or fromCommitId]");
+        return;
+    }
+    log("GMEBot", "Squashing branch '" + branchName + "' from commit " + fromCommitId + "...");
+    client.squashCommits(projectId, fromCommitId, branchName, message || null, function (err: any, result: any) {
+        if (err) {
+            log("GMEBot", "[squashBranch failed: " + err.message + "]");
+            return;
+        }
+        log("GMEBot", "Branch squashed." + (result && result.hash ? " New hash: " + result.hash : ""));
     });
 }
 

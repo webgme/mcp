@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PROJECT_TOOLS = exports.switchProject = exports.listProjects = exports.createProject = exports.listSeeds = void 0;
+exports.PROJECT_TOOLS = exports.switchProject = exports.listProjects = exports.deleteProject = exports.createProject = exports.listSeeds = void 0;
 exports.listSeeds = {
     definition: {
         name: "listSeeds",
@@ -12,9 +12,25 @@ exports.listSeeds = {
             required: [],
         },
     },
-    handler: async (_args, _ctx) => {
-        // TODO: use ctx.safeStorage / gmeConfig to enumerate available seeds
-        return { data: { seeds: [] } };
+    handler: async (_args, ctx) => {
+        const gmeConfig = ctx.gmeConfig;
+        if (!gmeConfig || !gmeConfig.seedProjects) {
+            return { data: { seeds: [] } };
+        }
+        let seedDict = {};
+        try {
+            // Prefer the engine helper when available.
+            // eslint-disable-next-line @typescript-eslint/no-require-imports
+            const engineUtils = require("webgme-engine/src/utils");
+            if (engineUtils && typeof engineUtils.getSeedDictionarySync === "function") {
+                seedDict = engineUtils.getSeedDictionarySync(gmeConfig) || {};
+            }
+        }
+        catch (e) {
+            ctx.logger.warn("listSeeds: failed to use engine utils: " + (e && e.message));
+        }
+        const seeds = Object.keys(seedDict).sort();
+        return { data: { seeds } };
     },
 };
 exports.createProject = {
@@ -37,9 +53,97 @@ exports.createProject = {
             required: ["projectName"],
         },
     },
-    handler: async (_args, _ctx) => {
-        // TODO: call ctx.safeStorage.createProject / seed logic
-        return { data: { created: false, message: "not implemented yet" } };
+    handler: async (args, ctx) => {
+        if (!ctx.safeStorage) {
+            return { data: { created: false, message: "storage not available" } };
+        }
+        const projectName = args.projectName;
+        const seedName = args.seedName;
+        if (!projectName || typeof projectName !== "string") {
+            return { data: { created: false, message: "projectName is required." } };
+        }
+        const data = {
+            projectName,
+            username: ctx.userId,
+            ownerId: ctx.userId,
+        };
+        // For now we store the requested seed as project kind; actual seeding is handled by WebGME tooling.
+        if (seedName && typeof seedName === "string") {
+            data.kind = seedName;
+        }
+        try {
+            const project = await ctx.safeStorage.createProject(data);
+            const projectId = (project && typeof project.getProjectId === "function"
+                ? project.getProjectId()
+                : (project && (project.projectId || project._id))) || "";
+            return {
+                data: {
+                    created: true,
+                    message: seedName
+                        ? `Project '${projectName}' created (seed '${seedName}' requested).`
+                        : `Project '${projectName}' created.`,
+                    projectId,
+                },
+            };
+        }
+        catch (e) {
+            ctx.logger.warn("createProject failed: " + (e && e.message));
+            return {
+                data: {
+                    created: false,
+                    message: "Failed to create project: " + (e && e.message),
+                },
+            };
+        }
+    },
+};
+exports.deleteProject = {
+    definition: {
+        name: "deleteProject",
+        description: "Delete a WebGME project on the server. " +
+            "The user must have delete rights on the project. " +
+            "Returns a JSON object with 'deleted' (boolean) and 'projectId'.",
+        parameters: {
+            type: "object",
+            properties: {
+                projectId: {
+                    type: "string",
+                    description: "Identifier of the project to delete (e.g. owner+MyProject). Use listProjects to discover available IDs.",
+                },
+            },
+            required: ["projectId"],
+        },
+    },
+    handler: async (args, ctx) => {
+        if (!ctx.safeStorage) {
+            return { data: { deleted: false, message: "storage not available" } };
+        }
+        const projectId = args.projectId;
+        if (!projectId || typeof projectId !== "string") {
+            return { data: { deleted: false, message: "projectId is required." } };
+        }
+        try {
+            const didExist = await ctx.safeStorage.deleteProject({
+                projectId,
+                username: ctx.userId,
+            });
+            return {
+                data: {
+                    deleted: !!didExist,
+                    projectId,
+                },
+            };
+        }
+        catch (e) {
+            ctx.logger.warn("deleteProject failed: " + (e && e.message));
+            return {
+                data: {
+                    deleted: false,
+                    projectId,
+                    message: "Failed to delete project: " + (e && e.message),
+                },
+            };
+        }
     },
 };
 exports.listProjects = {
@@ -121,4 +225,5 @@ exports.PROJECT_TOOLS = [
     exports.createProject,
     exports.listProjects,
     exports.switchProject,
+    exports.deleteProject,
 ];

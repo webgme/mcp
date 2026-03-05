@@ -4,6 +4,81 @@ declare const $: any;
 define(["jquery", "./commands"], function ($: any, Commands: any) {
     "use strict";
 
+    /** Context sent with each chat request; built from WebGME client and State. */
+    interface ChatContext {
+        projectId?: string;
+        branchName?: string;
+        activeNodeId?: string;
+        activeVisualizerId?: string;
+        activeTabId?: number;
+        /** Set by client when sending a continuation after backend requested diagramLayout. */
+        diagramLayout?: {
+            nodes: Array<{ path: string; x: number; y: number; width?: number; height?: number }>;
+            connections?: Array<{ sourcePath: string; targetPath: string }>;
+        };
+    }
+
+    /** Continuation message sent when the client provides layout data in a follow-up request. */
+    const CONTINUATION_MESSAGE = "[Continuation: layout data provided.]";
+
+    /**
+     * Collect diagram layout (paths and bounding boxes) from the active diagram widget.
+     * Works for both model diagram (ModelEditor) and meta diagram (MetaEditor): uses
+     * WebGMEGlobal.PanelManager.getActivePanel() then designerCanvas or diagramDesigner.
+     * Resolves designer component IDs to actual node paths via control._ComponentID2GMEID
+     * (and _ComponentID2DocItemID for meta doc items). Also collects connections (edges)
+     * with sourcePath/targetPath for connectivity context.
+     */
+    function getDiagramLayoutFromClient(): {
+        nodes: Array<{ path: string; x: number; y: number; width?: number; height?: number }>;
+        connections?: Array<{ sourcePath: string; targetPath: string }>;
+    } {
+        const g = (typeof window !== "undefined" && (window as any).WebGMEGlobal) || undefined;
+        const panel = g?.PanelManager && typeof g.PanelManager.getActivePanel === "function"
+            ? g.PanelManager.getActivePanel()
+            : undefined;
+        if (!panel || !panel.control) return { nodes: [] };
+        const control = panel.control;
+        const designer = control.designerCanvas || control.diagramDesigner;
+        if (!designer || !designer.items || !designer.itemIds) return { nodes: [] };
+
+        /** Map designer component ID to actual path: GME path (model/meta concepts) or doc-item id (meta doc items). */
+        function resolvePath(componentId: string): string {
+            const c2g = control._ComponentID2GMEID;
+            const c2d = control._ComponentID2DocItemID;
+            if (c2g && typeof c2g[componentId] === "string") return c2g[componentId];
+            if (c2d && typeof c2d[componentId] === "string") return c2d[componentId];
+            return componentId;
+        }
+
+        const nodes: Array<{ path: string; x: number; y: number; width?: number; height?: number }> = [];
+        for (let i = 0; i < designer.itemIds.length; i++) {
+            const id = designer.itemIds[i];
+            const item = designer.items[id];
+            if (!item || typeof item.getBoundingBox !== "function") continue;
+            const bbox = item.getBoundingBox();
+            if (bbox == null || typeof bbox.x !== "number" || typeof bbox.y !== "number") continue;
+            const path = resolvePath(id);
+            const width = typeof bbox.x2 === "number" ? bbox.x2 - bbox.x : undefined;
+            const height = typeof bbox.y2 === "number" ? bbox.y2 - bbox.y : undefined;
+            nodes.push({ path, x: bbox.x, y: bbox.y, width, height });
+        }
+
+        const connections: Array<{ sourcePath: string; targetPath: string }> = [];
+        if (designer.connectionIds && designer.connectionEndIDs) {
+            for (let c = 0; c < designer.connectionIds.length; c++) {
+                const connId = designer.connectionIds[c];
+                const endIds = designer.connectionEndIDs[connId];
+                if (!endIds || endIds.srcObjId == null || endIds.dstObjId == null) continue;
+                const srcPath = resolvePath(endIds.srcObjId);
+                const dstPath = resolvePath(endIds.dstObjId);
+                connections.push({ sourcePath: srcPath, targetPath: dstPath });
+            }
+        }
+
+        return { nodes, connections };
+    }
+
     const GMEBOT_ICON_SVG =
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke-linejoin="round" class="gme-bot-btn-icon">' +
         '<defs><linearGradient id="metallicGrey" x1="0%" y1="0%" x2="100%" y2="100%">' +
@@ -357,8 +432,8 @@ define(["jquery", "./commands"], function ($: any, Commands: any) {
         }
 
         /** Build context from the WebGME client for this request. The client is always in a project;
-         * we always send projectId and branchName when the client exists. Active node is UI state. */
-        private _getContext(): { projectId?: string; branchName?: string; activeNodeId?: string } | undefined {
+         * we send projectId, branchName, activeNodeId from client/State, plus activeVisualizerId and activeTabId from State. */
+        private _getContext(): ChatContext | undefined {
             const client = this._client;
             if (!client) return undefined;
 
@@ -371,11 +446,21 @@ define(["jquery", "./commands"], function ($: any, Commands: any) {
                 g?.State && typeof g.State.getActiveObject === "function"
                     ? g.State.getActiveObject()
                     : undefined;
+            const activeVisualizerId =
+                g?.State && typeof g.State.getActiveVisualizer === "function"
+                    ? g.State.getActiveVisualizer()
+                    : undefined;
+            const activeTabId =
+                g?.State && typeof g.State.getActiveTab === "function"
+                    ? g.State.getActiveTab()
+                    : undefined;
 
             return {
                 projectId: projectId != null ? String(projectId) : undefined,
                 branchName: branchName != null ? String(branchName) : undefined,
                 activeNodeId: activeNodeId != null ? String(activeNodeId) : undefined,
+                activeVisualizerId: activeVisualizerId != null ? String(activeVisualizerId) : undefined,
+                activeTabId: typeof activeTabId === "number" ? activeTabId : undefined,
             };
         }
 
@@ -389,7 +474,7 @@ define(["jquery", "./commands"], function ($: any, Commands: any) {
             this._setInputEnabled(false);
 
             const context = this._getContext();
-            const payload: { message: string; context?: { projectId?: string; branchName?: string; activeNodeId?: string } } = { message: text };
+            const payload: { message: string; context?: ChatContext; continuation?: boolean } = { message: text };
             if (context) {
                 payload.context = context;
             }
@@ -398,17 +483,43 @@ define(["jquery", "./commands"], function ($: any, Commands: any) {
                 console.log("[GMEBot] sending payload:", JSON.stringify(payload, null, 2));
             }
 
+            this._postChat(payload, (data: any) => {
+                this._appendMessage("GMEBot", data.reply || "(no response)");
+                if (data.commands) {
+                    this._executeCommands(data.commands);
+                }
+                this._input.trigger("focus");
+            });
+        }
+
+        /**
+         * Send a chat request; if the backend returns continuation + requestClientData, gather layout and send a follow-up, then call onComplete with the final response.
+         */
+        private _postChat(
+            payload: { message: string; context?: ChatContext; continuation?: boolean },
+            onComplete: (data: any) => void
+        ): void {
             $.ajax({
                 type: "POST",
                 url: "/cback/chat",
                 contentType: "application/json",
                 data: JSON.stringify(payload),
                 success: (data: any) => {
-                    this._appendMessage("GMEBot", data.reply || "(no response)");
-                    if (data.commands) {
-                        this._executeCommands(data.commands);
+                    if (data.continuation === true && data.requestClientData && typeof data.requestClientData.key === "string") {
+                        const key = data.requestClientData.key as string;
+                        const baseContext = this._getContext() || {};
+                        const nextContext: ChatContext = { ...baseContext };
+                        if (key === "diagramLayout") {
+                            nextContext.diagramLayout = getDiagramLayoutFromClient();
+                        }
+                        this._postChat(
+                            { message: CONTINUATION_MESSAGE, context: nextContext, continuation: true },
+                            onComplete
+                        );
+                        return;
                     }
-                    this._input.trigger("focus");
+                    onComplete(data);
+                    this._setInputEnabled(true);
                 },
                 error: (xhr: any) => {
                     let msg = "Connection error";
@@ -417,10 +528,9 @@ define(["jquery", "./commands"], function ($: any, Commands: any) {
                         if (body.error) { msg = body.error; }
                     } catch (_e) { /* use default */ }
                     this._appendMessage("GMEBot", "[Error] " + msg);
-                },
-                complete: () => {
                     this._setInputEnabled(true);
                 },
+                complete: () => { /* input re-enabled in success or error */ },
             });
         }
 

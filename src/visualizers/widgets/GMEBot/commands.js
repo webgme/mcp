@@ -19,6 +19,10 @@ define(["require", "exports"], function (require, exports) {
     }
     const HANDLERS = {
         switchProject: cmdSwitchProject,
+        createBranch: cmdCreateBranch,
+        switchBranch: cmdSwitchProject,
+        deleteBranch: cmdDeleteBranch,
+        squashBranch: cmdSquashBranch,
         createNode: cmdCreateNode,
         moveNode: cmdMoveNode,
         deleteNode: cmdDeleteNode,
@@ -45,6 +49,58 @@ define(["require", "exports"], function (require, exports) {
                 return;
             }
             log("GMEBot", "Switched to " + label);
+        });
+    }
+    function cmdCreateBranch(args, client, log) {
+        const projectId = args.projectId;
+        const branchName = args.branchName;
+        const fromCommitHash = args.fromCommitHash;
+        if (!client || !projectId || !branchName || !fromCommitHash) {
+            log("GMEBot", "[createBranch: missing client, projectId, branchName, or fromCommitHash]");
+            return;
+        }
+        log("GMEBot", "Creating branch '" + branchName + "' from commit " + fromCommitHash + "...");
+        client.createBranch(projectId, branchName, fromCommitHash, function (err) {
+            if (err) {
+                log("GMEBot", "[createBranch failed: " + err.message + "]");
+                return;
+            }
+            log("GMEBot", "Branch '" + branchName + "' created.");
+        });
+    }
+    function cmdDeleteBranch(args, client, log) {
+        const projectId = args.projectId;
+        const branchName = args.branchName;
+        const branchHash = args.branchHash;
+        if (!client || !projectId || !branchName || !branchHash) {
+            log("GMEBot", "[deleteBranch: missing client, projectId, branchName, or branchHash]");
+            return;
+        }
+        log("GMEBot", "Deleting branch '" + branchName + "'...");
+        client.deleteBranch(projectId, branchName, branchHash, function (err) {
+            if (err) {
+                log("GMEBot", "[deleteBranch failed: " + err.message + "]");
+                return;
+            }
+            log("GMEBot", "Branch '" + branchName + "' deleted.");
+        });
+    }
+    function cmdSquashBranch(args, client, log) {
+        const projectId = args.projectId;
+        const branchName = args.branchName;
+        const fromCommitId = args.fromCommitId;
+        const message = args.message;
+        if (!client || !projectId || !branchName || !fromCommitId) {
+            log("GMEBot", "[squashBranch: missing client, projectId, branchName, or fromCommitId]");
+            return;
+        }
+        log("GMEBot", "Squashing branch '" + branchName + "' from commit " + fromCommitId + "...");
+        client.squashCommits(projectId, fromCommitId, branchName, message || null, function (err, result) {
+            if (err) {
+                log("GMEBot", "[squashBranch failed: " + err.message + "]");
+                return;
+            }
+            log("GMEBot", "Branch squashed." + (result && result.hash ? " New hash: " + result.hash : ""));
         });
     }
     function cmdSetClientState(args, _client, log) {

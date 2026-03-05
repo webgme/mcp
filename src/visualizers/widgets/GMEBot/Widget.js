@@ -1,5 +1,64 @@
 define(["jquery", "./commands"], function ($, Commands) {
     "use strict";
+    /** Continuation message sent when the client provides layout data in a follow-up request. */
+    const CONTINUATION_MESSAGE = "[Continuation: layout data provided.]";
+    /**
+     * Collect diagram layout (paths and bounding boxes) from the active diagram widget.
+     * Works for both model diagram (ModelEditor) and meta diagram (MetaEditor): uses
+     * WebGMEGlobal.PanelManager.getActivePanel() then designerCanvas or diagramDesigner.
+     * Resolves designer component IDs to actual node paths via control._ComponentID2GMEID
+     * (and _ComponentID2DocItemID for meta doc items). Also collects connections (edges)
+     * with sourcePath/targetPath for connectivity context.
+     */
+    function getDiagramLayoutFromClient() {
+        const g = (typeof window !== "undefined" && window.WebGMEGlobal) || undefined;
+        const panel = (g === null || g === void 0 ? void 0 : g.PanelManager) && typeof g.PanelManager.getActivePanel === "function"
+            ? g.PanelManager.getActivePanel()
+            : undefined;
+        if (!panel || !panel.control)
+            return { nodes: [] };
+        const control = panel.control;
+        const designer = control.designerCanvas || control.diagramDesigner;
+        if (!designer || !designer.items || !designer.itemIds)
+            return { nodes: [] };
+        /** Map designer component ID to actual path: GME path (model/meta concepts) or doc-item id (meta doc items). */
+        function resolvePath(componentId) {
+            const c2g = control._ComponentID2GMEID;
+            const c2d = control._ComponentID2DocItemID;
+            if (c2g && typeof c2g[componentId] === "string")
+                return c2g[componentId];
+            if (c2d && typeof c2d[componentId] === "string")
+                return c2d[componentId];
+            return componentId;
+        }
+        const nodes = [];
+        for (let i = 0; i < designer.itemIds.length; i++) {
+            const id = designer.itemIds[i];
+            const item = designer.items[id];
+            if (!item || typeof item.getBoundingBox !== "function")
+                continue;
+            const bbox = item.getBoundingBox();
+            if (bbox == null || typeof bbox.x !== "number" || typeof bbox.y !== "number")
+                continue;
+            const path = resolvePath(id);
+            const width = typeof bbox.x2 === "number" ? bbox.x2 - bbox.x : undefined;
+            const height = typeof bbox.y2 === "number" ? bbox.y2 - bbox.y : undefined;
+            nodes.push({ path, x: bbox.x, y: bbox.y, width, height });
+        }
+        const connections = [];
+        if (designer.connectionIds && designer.connectionEndIDs) {
+            for (let c = 0; c < designer.connectionIds.length; c++) {
+                const connId = designer.connectionIds[c];
+                const endIds = designer.connectionEndIDs[connId];
+                if (!endIds || endIds.srcObjId == null || endIds.dstObjId == null)
+                    continue;
+                const srcPath = resolvePath(endIds.srcObjId);
+                const dstPath = resolvePath(endIds.dstObjId);
+                connections.push({ sourcePath: srcPath, targetPath: dstPath });
+            }
+        }
+        return { nodes, connections };
+    }
     const GMEBOT_ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke-linejoin="round" class="gme-bot-btn-icon">' +
         '<defs><linearGradient id="metallicGrey" x1="0%" y1="0%" x2="100%" y2="100%">' +
         '<stop offset="0%" stop-color="#d8dce0"/><stop offset="50%" stop-color="#b8bcc0"/><stop offset="100%" stop-color="#989ca0"/>' +
@@ -302,7 +361,7 @@ define(["jquery", "./commands"], function ($, Commands) {
             this._dialog.css({ top: Math.max(top, 8), left: left });
         }
         /** Build context from the WebGME client for this request. The client is always in a project;
-         * we always send projectId and branchName when the client exists. Active node is UI state. */
+         * we send projectId, branchName, activeNodeId from client/State, plus activeVisualizerId and activeTabId from State. */
         _getContext() {
             const client = this._client;
             if (!client)
@@ -313,10 +372,18 @@ define(["jquery", "./commands"], function ($, Commands) {
             const activeNodeId = (g === null || g === void 0 ? void 0 : g.State) && typeof g.State.getActiveObject === "function"
                 ? g.State.getActiveObject()
                 : undefined;
+            const activeVisualizerId = (g === null || g === void 0 ? void 0 : g.State) && typeof g.State.getActiveVisualizer === "function"
+                ? g.State.getActiveVisualizer()
+                : undefined;
+            const activeTabId = (g === null || g === void 0 ? void 0 : g.State) && typeof g.State.getActiveTab === "function"
+                ? g.State.getActiveTab()
+                : undefined;
             return {
                 projectId: projectId != null ? String(projectId) : undefined,
                 branchName: branchName != null ? String(branchName) : undefined,
                 activeNodeId: activeNodeId != null ? String(activeNodeId) : undefined,
+                activeVisualizerId: activeVisualizerId != null ? String(activeVisualizerId) : undefined,
+                activeTabId: typeof activeTabId === "number" ? activeTabId : undefined,
             };
         }
         _handleSend() {
@@ -335,17 +402,36 @@ define(["jquery", "./commands"], function ($, Commands) {
             if (typeof console !== "undefined" && console.log) {
                 console.log("[GMEBot] sending payload:", JSON.stringify(payload, null, 2));
             }
+            this._postChat(payload, (data) => {
+                this._appendMessage("GMEBot", data.reply || "(no response)");
+                if (data.commands) {
+                    this._executeCommands(data.commands);
+                }
+                this._input.trigger("focus");
+            });
+        }
+        /**
+         * Send a chat request; if the backend returns continuation + requestClientData, gather layout and send a follow-up, then call onComplete with the final response.
+         */
+        _postChat(payload, onComplete) {
             $.ajax({
                 type: "POST",
                 url: "/cback/chat",
                 contentType: "application/json",
                 data: JSON.stringify(payload),
                 success: (data) => {
-                    this._appendMessage("GMEBot", data.reply || "(no response)");
-                    if (data.commands) {
-                        this._executeCommands(data.commands);
+                    if (data.continuation === true && data.requestClientData && typeof data.requestClientData.key === "string") {
+                        const key = data.requestClientData.key;
+                        const baseContext = this._getContext() || {};
+                        const nextContext = { ...baseContext };
+                        if (key === "diagramLayout") {
+                            nextContext.diagramLayout = getDiagramLayoutFromClient();
+                        }
+                        this._postChat({ message: CONTINUATION_MESSAGE, context: nextContext, continuation: true }, onComplete);
+                        return;
                     }
-                    this._input.trigger("focus");
+                    onComplete(data);
+                    this._setInputEnabled(true);
                 },
                 error: (xhr) => {
                     let msg = "Connection error";
@@ -357,10 +443,9 @@ define(["jquery", "./commands"], function ($, Commands) {
                     }
                     catch (_e) { /* use default */ }
                     this._appendMessage("GMEBot", "[Error] " + msg);
-                },
-                complete: () => {
                     this._setInputEnabled(true);
                 },
+                complete: () => { },
             });
         }
         _setInputEnabled(enabled) {

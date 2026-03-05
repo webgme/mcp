@@ -12,9 +12,26 @@ export const listSeeds: Tool = {
             required: [],
         },
     },
-    handler: async (_args, _ctx) => {
-        // TODO: use ctx.safeStorage / gmeConfig to enumerate available seeds
-        return { data: { seeds: [] } };
+    handler: async (_args, ctx) => {
+        const gmeConfig = ctx.gmeConfig;
+        if (!gmeConfig || !gmeConfig.seedProjects) {
+            return { data: { seeds: [] } };
+        }
+
+        let seedDict: Record<string, string> = {};
+        try {
+            // Prefer the engine helper when available.
+            // eslint-disable-next-line @typescript-eslint/no-require-imports
+            const engineUtils = require("webgme-engine/src/utils");
+            if (engineUtils && typeof engineUtils.getSeedDictionarySync === "function") {
+                seedDict = engineUtils.getSeedDictionarySync(gmeConfig) || {};
+            }
+        } catch (e: any) {
+            ctx.logger.warn("listSeeds: failed to use engine utils: " + (e && e.message));
+        }
+
+        const seeds = Object.keys(seedDict).sort();
+        return { data: { seeds } };
     },
 };
 
@@ -40,9 +57,104 @@ export const createProject: Tool = {
             required: ["projectName"],
         },
     },
-    handler: async (_args, _ctx) => {
-        // TODO: call ctx.safeStorage.createProject / seed logic
-        return { data: { created: false, message: "not implemented yet" } };
+    handler: async (args, ctx) => {
+        if (!ctx.safeStorage) {
+            return { data: { created: false, message: "storage not available" } };
+        }
+
+        const projectName: string = args.projectName;
+        const seedName: string | undefined = args.seedName;
+        if (!projectName || typeof projectName !== "string") {
+            return { data: { created: false, message: "projectName is required." } };
+        }
+
+        const data: any = {
+            projectName,
+            username: ctx.userId,
+            ownerId: ctx.userId,
+        };
+
+        // For now we store the requested seed as project kind; actual seeding is handled by WebGME tooling.
+        if (seedName && typeof seedName === "string") {
+            data.kind = seedName;
+        }
+
+        try {
+            const project = await (ctx.safeStorage as any).createProject(data);
+            const projectId: string =
+                (project && typeof project.getProjectId === "function"
+                    ? project.getProjectId()
+                    : (project && (project.projectId || project._id))) || "";
+            return {
+                data: {
+                    created: true,
+                    message: seedName
+                        ? `Project '${projectName}' created (seed '${seedName}' requested).`
+                        : `Project '${projectName}' created.`,
+                    projectId,
+                },
+            };
+        } catch (e: any) {
+            ctx.logger.warn("createProject failed: " + (e && e.message));
+            return {
+                data: {
+                    created: false,
+                    message: "Failed to create project: " + (e && e.message),
+                },
+            };
+        }
+    },
+};
+
+export const deleteProject: Tool = {
+    definition: {
+        name: "deleteProject",
+        description:
+            "Delete a WebGME project on the server. " +
+            "The user must have delete rights on the project. " +
+            "Returns a JSON object with 'deleted' (boolean) and 'projectId'.",
+        parameters: {
+            type: "object",
+            properties: {
+                projectId: {
+                    type: "string",
+                    description:
+                        "Identifier of the project to delete (e.g. owner+MyProject). Use listProjects to discover available IDs.",
+                },
+            },
+            required: ["projectId"],
+        },
+    },
+    handler: async (args, ctx) => {
+        if (!ctx.safeStorage) {
+            return { data: { deleted: false, message: "storage not available" } };
+        }
+        const projectId: string = args.projectId;
+        if (!projectId || typeof projectId !== "string") {
+            return { data: { deleted: false, message: "projectId is required." } };
+        }
+
+        try {
+            const didExist = await (ctx.safeStorage as any).deleteProject({
+                projectId,
+                username: ctx.userId,
+            });
+            return {
+                data: {
+                    deleted: !!didExist,
+                    projectId,
+                },
+            };
+        } catch (e: any) {
+            ctx.logger.warn("deleteProject failed: " + (e && e.message));
+            return {
+                data: {
+                    deleted: false,
+                    projectId,
+                    message: "Failed to delete project: " + (e && e.message),
+                },
+            };
+        }
     },
 };
 
@@ -135,4 +247,5 @@ export const PROJECT_TOOLS: Tool[] = [
     createProject,
     listProjects,
     switchProject,
+    deleteProject,
 ];
