@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.PROJECT_TOOLS = exports.switchProject = exports.listProjects = exports.deleteProject = exports.createProject = exports.listSeeds = void 0;
+const tools_1 = require("../tools");
 exports.listSeeds = {
     definition: {
         name: "listSeeds",
@@ -27,7 +28,7 @@ exports.listSeeds = {
             }
         }
         catch (e) {
-            ctx.logger.warn("listSeeds: failed to use engine utils: " + (e && e.message));
+            ctx.logger.debug("listSeeds: engine utils unavailable: " + (e && e.message));
         }
         const seeds = Object.keys(seedDict).sort();
         return { data: { seeds } };
@@ -87,7 +88,7 @@ exports.createProject = {
             };
         }
         catch (e) {
-            ctx.logger.warn("createProject failed: " + (e && e.message));
+            (0, tools_1.logToolFailure)(ctx, "createProject", args, e);
             return {
                 data: {
                     created: false,
@@ -135,7 +136,7 @@ exports.deleteProject = {
             };
         }
         catch (e) {
-            ctx.logger.warn("deleteProject failed: " + (e && e.message));
+            (0, tools_1.logToolFailure)(ctx, "deleteProject", args, e);
             return {
                 data: {
                     deleted: false,
@@ -168,7 +169,7 @@ exports.listProjects = {
             username: ctx.userId,
             info: true,
         });
-        ctx.logger.info("getProjects raw response: " + JSON.stringify(raw, null, 2));
+        ctx.logger.debug("listProjects raw response: " + JSON.stringify(raw, null, 2));
         const projects = raw.map((p) => {
             const id = p._id || "";
             const parts = id.split("+");

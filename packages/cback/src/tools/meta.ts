@@ -1,4 +1,4 @@
-import { Tool, commitCoreSession } from "../tools";
+import { Tool, commitCoreSession, logToolFailure } from "../tools";
 import { getDiagramLayout } from "./node";
 
 const META_SHEETS_REGISTRY = "MetaSheets";
@@ -68,6 +68,22 @@ async function resolveMetaPathOrName(
         return resolveByName(pathPart);
     }
     return resolveByName(s);
+}
+
+/** Normalize connection-style pointer names to WebGME reserved 'src' and 'dst'. */
+function normalizeConnectionPointerName(raw: string): string {
+    const s = String(raw ?? "").trim().toLowerCase();
+    if (s === "source" || s === "from" || s === "origin") return "src";
+    if (s === "destination" || s === "to" || s === "sink") return "dst";
+    if (s === "src" || s === "dst") return s;
+    return String(raw ?? "").trim();
+}
+
+/** Get targetPath from a pointer/set item; tolerate common LLM typos (e.g. target,Path). */
+function getPointerTargetPath(item: any): string {
+    if (item == null) return "";
+    const v = item.targetPath ?? item.target_path ?? (item as any)["target,Path"];
+    return v != null ? String(v).trim() : "";
 }
 
 function generateGuid(): string {
@@ -156,7 +172,7 @@ export const createMetaSheet: Tool = {
                 },
             };
         } catch (e: any) {
-            ctx.logger.warn("createMetaSheet failed: " + (e && e.message));
+            logToolFailure(ctx, "createMetaSheet", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -349,7 +365,7 @@ export const deleteMetaSheet: Tool = {
                 },
             };
         } catch (e: any) {
-            ctx.logger.warn("deleteMetaSheet failed: " + (e && e.message));
+            logToolFailure(ctx, "deleteMetaSheet", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -404,7 +420,7 @@ export const isMetaNodeTool: Tool = {
                 },
             };
         } catch (e: any) {
-            ctx.logger.warn("isMetaNode failed: " + (e && e.message));
+            logToolFailure(ctx, "isMetaNode", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -415,7 +431,7 @@ export const createMetaNode: Tool = {
         name: "createMetaNode",
         description:
             "Create a new META concept (meta-node) under the project ROOT. Use for new concepts/types/metamodel elements—not for instance nodes (use createNode). " +
-            "Optional: pass 'contains' to define what the new concept can contain; 'pointers' for 0..1 references. For connection/edge/link concepts you MUST use pointer names 'src' and 'dst' only (e.g. pointers: [{ pointerName: 'src', targetPath: 'NodeA' }, { pointerName: 'dst', targetPath: 'NodeB' }]). For other concepts use any pointer names (e.g. 'target', 'parent'). 'sets' for multi-target references. Backend does concept + all relations in one step. " +
+            "Optional: pass 'contains' to define what the new concept can contain; 'pointers' for 0..1 references. For connection/edge/link concepts you MUST use pointer names 'src' and 'dst' only (e.g. pointers: [{ pointerName: 'src', targetPath: 'NodeA' }, { pointerName: 'dst', targetPath: 'NodeB' }]). Prefer 'src' and 'dst' for connection endpoints so WebGME shows them as connections. For other concepts use any pointer names (e.g. 'target', 'parent'). 'sets' for multi-target references. Backend does concept + all relations in one step. " +
             "basePath: concept name (e.g. FCO) or path from getMetaInfo; omit for FCO.",
         parameters: {
             type: "object",
@@ -446,11 +462,11 @@ export const createMetaNode: Tool = {
                 pointers: {
                     type: "array",
                     description:
-                        "Optional. Pointers on this concept (0..1 each). Each item: { pointerName: string, targetPath: string }. For connection/edge concepts use pointerName exactly 'src' or 'dst'; for other concepts use e.g. 'target', 'parent'. targetPath = concept name or path.",
+                        "Optional. Pointers on this concept (0..1 each). Each item: { pointerName: string, targetPath: string }. For connection/edge concepts prefer pointerName 'src' and 'dst' so WebGME shows them as connections; order is preserved. targetPath = concept name or path. You can instead create the concept then call setMetaPointer for each pointer if you prefer.",
                     items: {
                         type: "object",
                         properties: {
-                            pointerName: { type: "string", description: "Pointer name. For connections use exactly 'src' or 'dst'. Otherwise e.g. 'target', 'parent'." },
+                            pointerName: { type: "string", description: "Pointer name. For connections prefer 'src' or 'dst' for correct display; backend maps source/destination/from/to to src/dst. Otherwise e.g. 'target', 'parent'." },
                             targetPath: { type: "string", description: "Valid target concept name or path." },
                         },
                         required: ["pointerName", "targetPath"],
@@ -601,8 +617,9 @@ export const createMetaNode: Tool = {
             const pointersArg = args.pointers;
             if (Array.isArray(pointersArg) && pointersArg.length > 0) {
                 for (const item of pointersArg) {
-                    const pointerName = item?.pointerName != null ? String(item.pointerName).trim() : "";
-                    const targetPathOrName = item?.targetPath != null ? String(item.targetPath).trim() : "";
+                    const rawPointerName = item?.pointerName != null ? String(item.pointerName).trim() : "";
+                    const pointerName = normalizeConnectionPointerName(rawPointerName) || rawPointerName;
+                    const targetPathOrName = getPointerTargetPath(item);
                     if (!pointerName || !targetPathOrName) continue;
                     const targetPath = await resolveMetaPathOrName(core, root, targetPathOrName);
                     if (targetPath == null) {
@@ -614,8 +631,8 @@ export const createMetaNode: Tool = {
                     const isTargetMeta = typeof core.isMetaNode === "function" ? core.isMetaNode(targetNode) : false;
                     if (!isTargetMeta) continue;
                     try {
-                        core.setPointerMetaLimits(node, pointerName, 0, 1);
-                        core.setPointerMetaTarget(node, pointerName, targetNode, 0, 1);
+                        core.setPointerMetaLimits(node, pointerName, 1, 1);
+                        core.setPointerMetaTarget(node, pointerName, targetNode, 1, 1);
                         pointersDone.push({ pointerName, targetPath });
                     } catch (err: any) {
                         ctx.logger.warn("createMetaNode setPointerMeta: " + (err && err.message));
@@ -628,7 +645,7 @@ export const createMetaNode: Tool = {
             if (Array.isArray(setsArg) && setsArg.length > 0) {
                 for (const item of setsArg) {
                     const setName = item?.setName != null ? String(item.setName).trim() : "";
-                    const targetPathOrName = item?.targetPath != null ? String(item.targetPath).trim() : "";
+                    const targetPathOrName = getPointerTargetPath(item);
                     if (!setName || !targetPathOrName) continue;
                     const targetPath = await resolveMetaPathOrName(core, root, targetPathOrName);
                     if (targetPath == null) {
@@ -668,7 +685,7 @@ export const createMetaNode: Tool = {
                 },
             };
         } catch (e: any) {
-            ctx.logger.warn("createMetaNode failed: " + (e && e.message));
+            logToolFailure(ctx, "createMetaNode", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -678,7 +695,8 @@ export const setMetaAttribute: Tool = {
     definition: {
         name: "setMetaAttribute",
         description:
-            "Define or update an attribute's META rule on a concept (meta-node). " +
+            "Define or update an attribute's META rule on a concept (meta-node). Use only when the user asks to define or change the rule (e.g. type, min, max, default). " +
+            "When the user asks to change or set the value of an attribute on a concept (e.g. 'rename Folder to MyFolder', 'set name of concept X to Y'), use node tools instead: findNodesByName, getProperty, setProperty. " +
             "Wraps core.setAttributeMeta on the server. Rule is passed through as-is.",
         parameters: {
             type: "object",
@@ -769,7 +787,51 @@ export const setMetaAttribute: Tool = {
                 },
             };
         } catch (e: any) {
-            ctx.logger.warn("setMetaAttribute failed: " + (e && e.message));
+            logToolFailure(ctx, "setMetaAttribute", args, e);
+            return { data: { error: (e && e.message) || String(e) } };
+        }
+    },
+};
+
+export const delMetaAttribute: Tool = {
+    definition: {
+        name: "delMetaAttribute",
+        description:
+            "Remove an attribute's META rule from a concept. The attribute will no longer have a meta definition on this concept (inherited rules may still apply). " +
+            "conceptPath can be path or concept name; attributeName = name of the attribute whose rule to remove.",
+        parameters: {
+            type: "object",
+            properties: {
+                conceptPath: {
+                    type: "string",
+                    description: "Concept path (e.g. /MyType) or concept name.",
+                },
+                attributeName: {
+                    type: "string",
+                    description: "Name of the attribute whose meta rule to remove (e.g. 'name', 'position').",
+                },
+            },
+            required: ["conceptPath", "attributeName"],
+        },
+    },
+    handler: async (args, ctx) => {
+        ensureCoreSession(ctx);
+        const { core, root } = ctx.coreSession;
+        const conceptPathOrName = String(args.conceptPath ?? "").trim();
+        const attributeName = String(args.attributeName ?? "").trim();
+        if (!conceptPathOrName || !attributeName) {
+            return { data: { error: "conceptPath and attributeName are required." } };
+        }
+        try {
+            const conceptPath = await resolveMetaPathOrName(core, root, conceptPathOrName);
+            if (conceptPath == null) return { data: { error: "Concept not found: '" + conceptPathOrName + "'." } };
+            const conceptNode = conceptPath === core.getPath(root) ? root : await core.loadByPath(root, conceptPath);
+            if (!conceptNode) return { data: { error: "Concept not found at " + conceptPath } };
+            core.delAttributeMeta(conceptNode, attributeName);
+            await commitCoreSession(ctx.coreSession, "GMEBot: delMetaAttribute");
+            return { data: { deleted: true, conceptPath: core.getPath(conceptNode), attributeName } };
+        } catch (e: any) {
+            logToolFailure(ctx, "delMetaAttribute", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -902,7 +964,54 @@ export const setMetaContainment: Tool = {
                 },
             };
         } catch (e: any) {
-            ctx.logger.warn("setMetaContainment failed: " + (e && e.message));
+            logToolFailure(ctx, "setMetaContainment", args, e);
+            return { data: { error: (e && e.message) || String(e) } };
+        }
+    },
+};
+
+export const delMetaContainment: Tool = {
+    definition: {
+        name: "delMetaContainment",
+        description:
+            "Remove a META-level containment rule: the container concept can no longer contain the specified child type. " +
+            "sourcePath = container concept, targetPath = contained concept to remove from its allowed children. Paths can be absolute or concept names.",
+        parameters: {
+            type: "object",
+            properties: {
+                sourcePath: {
+                    type: "string",
+                    description: "Container concept path or name (the concept that currently allows the child).",
+                },
+                targetPath: {
+                    type: "string",
+                    description: "Contained concept path or name to remove from allowed children.",
+                },
+            },
+            required: ["sourcePath", "targetPath"],
+        },
+    },
+    handler: async (args, ctx) => {
+        ensureCoreSession(ctx);
+        const { core, root } = ctx.coreSession;
+        const sourcePathOrName = String(args.sourcePath ?? "").trim();
+        const targetPathOrName = String(args.targetPath ?? "").trim();
+        if (!sourcePathOrName || !targetPathOrName) {
+            return { data: { error: "sourcePath and targetPath are required." } };
+        }
+        try {
+            const sourcePath = await resolveMetaPathOrName(core, root, sourcePathOrName);
+            const targetPath = await resolveMetaPathOrName(core, root, targetPathOrName);
+            if (sourcePath == null) return { data: { error: "Source concept not found: '" + sourcePathOrName + "'." } };
+            if (targetPath == null) return { data: { error: "Target concept not found: '" + targetPathOrName + "'." } };
+            const rootPath = core.getPath(root);
+            const sourceNode = sourcePath === rootPath ? root : await core.loadByPath(root, sourcePath);
+            if (!sourceNode) return { data: { error: "Source concept not found at " + sourcePath } };
+            core.delChildMeta(sourceNode, targetPath);
+            await commitCoreSession(ctx.coreSession, "GMEBot: delMetaContainment");
+            return { data: { deleted: true, sourcePath, targetPath } };
+        } catch (e: any) {
+            logToolFailure(ctx, "delMetaContainment", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -915,9 +1024,9 @@ export const setMetaPointer: Tool = {
     definition: {
         name: "setMetaPointer",
         description:
-            "Define a META-level pointer on a concept: instances can reference at most one target (0..1). " +
-            "Adds a valid target type for the pointer. Cardinality is fixed internally (min=0, max=1). " +
-            "For connection/link/edge concepts you MUST use pointerName exactly 'src' or 'dst' (WebGME reserved names). Do not use 'source', 'destination', 'from', 'to'. " +
+            "Define a META-level pointer on a concept: instances can reference at most one target. " +
+            "Adds a valid target type for the pointer. Uses min=1, max=1 so it is displayed as a pointer (not a set). " +
+            "For connection/link/edge concepts prefer pointerName 'src' or 'dst' so WebGME shows them as connections; backend maps source/from/destination/to to src/dst. " +
             "conceptPath and targetPath must be absolute paths (e.g. /FCO, /MyConcept) or concept names; if a value does not start with '/', it is resolved as a concept name from the metamodel.",
         parameters: {
             type: "object",
@@ -928,7 +1037,7 @@ export const setMetaPointer: Tool = {
                 },
                 pointerName: {
                     type: "string",
-                    description: "Name of the pointer. For connection/edge concepts use exactly 'src' or 'dst'. For other concepts e.g. 'target', 'parent'.",
+                    description: "Name of the pointer. For connection/edge concepts prefer 'src' or 'dst' for correct visualization; backend maps source/destination/from/to to src/dst. For other concepts e.g. 'target', 'parent'.",
                 },
                 targetPath: {
                     type: "string",
@@ -942,7 +1051,7 @@ export const setMetaPointer: Tool = {
         ensureCoreSession(ctx);
         const { core, root } = ctx.coreSession;
         const conceptPathOrName = String(args.conceptPath ?? "").trim();
-        const pointerName = String(args.pointerName ?? "").trim();
+        const pointerName = normalizeConnectionPointerName(String(args.pointerName ?? "").trim()) || String(args.pointerName ?? "").trim();
         const targetPathOrName = String(args.targetPath ?? "").trim();
         if (!conceptPathOrName || !pointerName || !targetPathOrName) {
             return { data: { error: "conceptPath, pointerName, and targetPath are required." } };
@@ -960,8 +1069,6 @@ export const setMetaPointer: Tool = {
             const targetNode = targetPath === core.getPath(root) ? root : await core.loadByPath(root, targetPath);
             if (!conceptNode) return { data: { error: "Concept not found at " + conceptPath } };
             if (!targetNode) return { data: { error: "Target concept not found at " + targetPath } };
-            const min = 1;
-            const max = 1;
             core.setPointerMetaLimits(conceptNode, pointerName, 1, 1);
             core.setPointerMetaTarget(conceptNode, pointerName, targetNode, 1, 1);
             await commitCoreSession(ctx.coreSession, "GMEBot: setMetaPointer");
@@ -969,7 +1076,101 @@ export const setMetaPointer: Tool = {
                 data: { conceptPath: core.getPath(conceptNode), pointerName, targetPath: core.getPath(targetNode) },
             };
         } catch (e: any) {
-            ctx.logger.warn("setMetaPointer failed: " + (e && e.message));
+            logToolFailure(ctx, "setMetaPointer", args, e);
+            return { data: { error: (e && e.message) || String(e) } };
+        }
+    },
+};
+
+export const delMetaPointer: Tool = {
+    definition: {
+        name: "delMetaPointer",
+        description:
+            "Remove a META-level pointer (or set) definition from a concept. The pointer/set and all its target rules are removed. " +
+            "conceptPath can be absolute path or concept name; pointerName must match the name used when the pointer was defined (e.g. 'src', 'dst').",
+        parameters: {
+            type: "object",
+            properties: {
+                conceptPath: {
+                    type: "string",
+                    description: "Concept path (e.g. /MyType) or concept name. Use leading '/' for path; otherwise treated as name.",
+                },
+                pointerName: {
+                    type: "string",
+                    description: "Name of the pointer or set to remove (e.g. 'src', 'dst', 'target').",
+                },
+            },
+            required: ["conceptPath", "pointerName"],
+        },
+    },
+    handler: async (args, ctx) => {
+        ensureCoreSession(ctx);
+        const { core, root } = ctx.coreSession;
+        const conceptPathOrName = String(args.conceptPath ?? "").trim();
+        const pointerName = String(args.pointerName ?? "").trim();
+        if (!conceptPathOrName || !pointerName) {
+            return { data: { error: "conceptPath and pointerName are required." } };
+        }
+        try {
+            const conceptPath = await resolveMetaPathOrName(core, root, conceptPathOrName);
+            if (conceptPath == null) {
+                return { data: { error: "Concept not found: '" + conceptPathOrName + "' (use path or concept name from getMetaInfo)." } };
+            }
+            const conceptNode = conceptPath === core.getPath(root) ? root : await core.loadByPath(root, conceptPath);
+            if (!conceptNode) {
+                return { data: { error: "Concept not found at " + conceptPath } };
+            }
+            core.delPointerMeta(conceptNode, pointerName);
+            await commitCoreSession(ctx.coreSession, "GMEBot: delMetaPointer");
+            return {
+                data: { deleted: true, conceptPath: core.getPath(conceptNode), pointerName },
+            };
+        } catch (e: any) {
+            logToolFailure(ctx, "delMetaPointer", args, e);
+            return { data: { error: (e && e.message) || String(e) } };
+        }
+    },
+};
+
+export const delMetaSet: Tool = {
+    definition: {
+        name: "delMetaSet",
+        description:
+            "Remove a META-level set definition from a concept. The set and all its target rules are removed. " +
+            "conceptPath can be path or concept name; setName must match the set name (e.g. 'members', 'refs').",
+        parameters: {
+            type: "object",
+            properties: {
+                conceptPath: {
+                    type: "string",
+                    description: "Concept path (e.g. /MyType) or concept name.",
+                },
+                setName: {
+                    type: "string",
+                    description: "Name of the set to remove (e.g. 'members', 'references').",
+                },
+            },
+            required: ["conceptPath", "setName"],
+        },
+    },
+    handler: async (args, ctx) => {
+        ensureCoreSession(ctx);
+        const { core, root } = ctx.coreSession;
+        const conceptPathOrName = String(args.conceptPath ?? "").trim();
+        const setName = String(args.setName ?? "").trim();
+        if (!conceptPathOrName || !setName) {
+            return { data: { error: "conceptPath and setName are required." } };
+        }
+        try {
+            const conceptPath = await resolveMetaPathOrName(core, root, conceptPathOrName);
+            if (conceptPath == null) return { data: { error: "Concept not found: '" + conceptPathOrName + "'." } };
+            const conceptNode = conceptPath === core.getPath(root) ? root : await core.loadByPath(root, conceptPath);
+            if (!conceptNode) return { data: { error: "Concept not found at " + conceptPath } };
+            core.delPointerMeta(conceptNode, setName);
+            await commitCoreSession(ctx.coreSession, "GMEBot: delMetaSet");
+            return { data: { deleted: true, conceptPath: core.getPath(conceptNode), setName } };
+        } catch (e: any) {
+            logToolFailure(ctx, "delMetaSet", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -1040,7 +1241,7 @@ export const setMetaSet: Tool = {
                 data: { conceptPath: core.getPath(conceptNode), setName, targetPath: core.getPath(targetNode), min, max },
             };
         } catch (e: any) {
-            ctx.logger.warn("setMetaSet failed: " + (e && e.message));
+            logToolFailure(ctx, "setMetaSet", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -1097,8 +1298,296 @@ export const setMetaMixin: Tool = {
                 data: { conceptPath: core.getPath(conceptNode), mixinPath: core.getPath(mixinNode) },
             };
         } catch (e: any) {
-            ctx.logger.warn("setMetaMixin failed: " + (e && e.message));
+            logToolFailure(ctx, "setMetaMixin", args, e);
             return { data: { error: (e && e.message) || String(e) } };
+        }
+    },
+};
+
+export const delMetaMixin: Tool = {
+    definition: {
+        name: "delMetaMixin",
+        description:
+            "Remove a META mixin from a concept. The concept will no longer inherit from that mixin type. " +
+            "conceptPath and mixinPath can be absolute paths or concept names.",
+        parameters: {
+            type: "object",
+            properties: {
+                conceptPath: {
+                    type: "string",
+                    description: "Concept path or name that currently has the mixin.",
+                },
+                mixinPath: {
+                    type: "string",
+                    description: "Mixin concept path or name to remove.",
+                },
+            },
+            required: ["conceptPath", "mixinPath"],
+        },
+    },
+    handler: async (args, ctx) => {
+        ensureCoreSession(ctx);
+        const { core, root } = ctx.coreSession;
+        const conceptPathOrName = String(args.conceptPath ?? "").trim();
+        const mixinPathOrName = String(args.mixinPath ?? "").trim();
+        if (!conceptPathOrName || !mixinPathOrName) {
+            return { data: { error: "conceptPath and mixinPath are required." } };
+        }
+        try {
+            const conceptPath = await resolveMetaPathOrName(core, root, conceptPathOrName);
+            const mixinPath = await resolveMetaPathOrName(core, root, mixinPathOrName);
+            if (conceptPath == null) return { data: { error: "Concept not found: '" + conceptPathOrName + "'." } };
+            if (mixinPath == null) return { data: { error: "Mixin concept not found: '" + mixinPathOrName + "'." } };
+            const rootPath = core.getPath(root);
+            const conceptNode = conceptPath === rootPath ? root : await core.loadByPath(root, conceptPath);
+            if (!conceptNode) return { data: { error: "Concept not found at " + conceptPath } };
+            const metaNode = core.getChild(conceptNode, "_meta");
+            if (!metaNode) return { data: { error: "Concept has no meta node at " + conceptPath } };
+            core.delMember(metaNode, MIXINS_SET, mixinPath);
+            await commitCoreSession(ctx.coreSession, "GMEBot: delMetaMixin");
+            return { data: { deleted: true, conceptPath: core.getPath(conceptNode), mixinPath } };
+        } catch (e: any) {
+            logToolFailure(ctx, "delMetaMixin", args, e);
+            return { data: { error: (e && e.message) || String(e) } };
+        }
+    },
+};
+
+export const checkMetaConsistency: Tool = {
+    definition: {
+        name: "checkMetaConsistency",
+        description:
+            "Run WebGME meta-layer consistency check (mixin and meta-rule violations on META concepts only). " +
+            "Use after meta modifications to ensure the metamodel itself is consistent. " +
+            "For checking that instance nodes in the model obey the meta rules (containment, pointers, etc.), use checkModelConsistency instead.",
+        parameters: {
+            type: "object",
+            properties: {
+                scope: {
+                    type: "string",
+                    description: "Optional. 'metaOnly' (default) = check all meta concepts; 'root' = check from root node with depth limit.",
+                },
+                maxDepth: {
+                    type: "number",
+                    description: "Optional. When scope is 'root', max tree depth to traverse (default 20).",
+                },
+            },
+            required: [],
+        },
+    },
+    handler: async (args, ctx) => {
+        ensureCoreSession(ctx);
+        const { core, root } = ctx.coreSession;
+        const scope = (args.scope === "root" ? "root" : "metaOnly") as "root" | "metaOnly";
+        const maxDepth = typeof args.maxDepth === "number" && args.maxDepth >= 1 && args.maxDepth <= 100 ? args.maxDepth : 20;
+
+        try {
+            if (typeof core.getMixinErrors !== "function") {
+                return { data: { ok: true, message: "getMixinErrors not available on this Core; skipping consistency check." } };
+            }
+
+            const violations: Array<{ path: string; message?: string; severity?: string; type?: string; hint?: string }> = [];
+            const rootPath = core.getPath(root);
+
+            if (scope === "metaOnly") {
+                const metaDict = core.getAllMetaNodes(root) || {};
+                for (const path of Object.keys(metaDict)) {
+                    const node = metaDict[path];
+                    if (!node) continue;
+                    let errs: any[] = [];
+                    try {
+                        errs = core.getMixinErrors(node) || [];
+                    } catch (_e) {
+                        continue;
+                    }
+                    if (!Array.isArray(errs)) continue;
+                    for (const v of errs) {
+                        violations.push({
+                            path,
+                            message: v.message != null ? String(v.message) : undefined,
+                            severity: v.severity != null ? String(v.severity) : undefined,
+                            type: v.type != null ? String(v.type) : undefined,
+                            hint: v.hint != null ? String(v.hint) : undefined,
+                        });
+                    }
+                }
+            } else {
+                async function walk(node: any, depth: number): Promise<void> {
+                    if (depth > maxDepth) return;
+                    try {
+                        const errs = core.getMixinErrors(node) || [];
+                        if (Array.isArray(errs)) {
+                            const path = core.getPath(node);
+                            for (const v of errs) {
+                                violations.push({
+                                    path,
+                                    message: v.message != null ? String(v.message) : undefined,
+                                    severity: v.severity != null ? String(v.severity) : undefined,
+                                    type: v.type != null ? String(v.type) : undefined,
+                                    hint: v.hint != null ? String(v.hint) : undefined,
+                                });
+                            }
+                        }
+                    } catch (_e) {
+                        // skip node
+                    }
+                    const children = core.getChildrenPaths(node) || [];
+                    for (const p of children) {
+                        const child = await core.loadByPath(root, p);
+                        if (child) await walk(child, depth + 1);
+                    }
+                }
+                await walk(root, 0);
+            }
+
+            return {
+                data: {
+                    ok: violations.length === 0,
+                    scope,
+                    violationCount: violations.length,
+                    ...(violations.length > 0 ? { violations } : {}),
+                },
+            };
+        } catch (e: any) {
+            logToolFailure(ctx, "checkMetaConsistency", args, e);
+            return { data: { error: (e && e.message) || String(e), ok: false } };
+        }
+    },
+};
+
+/** Run model-vs-meta constraint check: find any instance node (in project or sub-tree) that violates meta rules (containment, pointers, sets). */
+export const checkModelConsistency: Tool = {
+    definition: {
+        name: "checkModelConsistency",
+        description:
+            "Run the constraint check that finds any element in the project (or a sub-tree) that violates the meta rules. " +
+            "Validates instance nodes against the metamodel: containment, pointers, sets. Use this to see if the model obeys the meta (e.g. after meta changes or to audit the project). " +
+            "After any model changes (createNode, setProperty, setPointer, etc.), run this for the current scope: pass the client's active node path (context.activeNodeId) as nodePath with includeChildren true. " +
+            "Scope: whole project (omit nodePath or use '/' or '') or a sub-tree (pass nodePath and set includeChildren true to check that node and its descendants).",
+        parameters: {
+            type: "object",
+            properties: {
+                nodePath: {
+                    type: "string",
+                    description:
+                        "Optional. Root of the scope to check. Use context.activeNodeId for the current selection (recommended after model changes). Omit or '' or '/' = entire project; otherwise the node at this path and, if includeChildren, its descendants.",
+                },
+                includeChildren: {
+                    type: "boolean",
+                    description:
+                        "Optional. When true (default), check the given node and all its descendants. When false, check only the single node at nodePath.",
+                },
+                maxDepth: {
+                    type: "number",
+                    description: "Optional. Max depth to traverse from nodePath (default 100). Prevents runaway on huge trees.",
+                },
+            },
+            required: [],
+        },
+    },
+    handler: async (args, ctx) => {
+        ensureCoreSession(ctx);
+        const { core, root } = ctx.coreSession;
+        const nodePathNorm = String(args.nodePath ?? "").trim() || "/";
+        const includeChildren = args.includeChildren !== false;
+        const maxDepth = typeof args.maxDepth === "number" && args.maxDepth >= 1 && args.maxDepth <= 500 ? args.maxDepth : 100;
+
+        const violations: Array<{ path: string; message: string; type?: string }> = [];
+        const rootPath = core.getPath(root);
+
+        function add(path: string, message: string, type?: string) {
+            violations.push({ path, message, type: type ?? "meta_rule" });
+        }
+
+        try {
+            const startNode =
+                nodePathNorm === "/" || nodePathNorm === ""
+                    ? root
+                    : await core.loadByPath(root, nodePathNorm);
+            if (!startNode) {
+                return { data: { error: "Node not found at path: " + nodePathNorm } };
+            }
+
+            const isRoot = (n: any) => core.getPath(n) === rootPath;
+
+            async function checkOne(node: any): Promise<void> {
+                const path = core.getPath(node);
+                if (isRoot(node) || (typeof core.isLibraryRoot === "function" && core.isLibraryRoot(node))) {
+                    return;
+                }
+
+                const parent = core.getParent(node);
+                if (parent && typeof core.isValidChildOf === "function") {
+                    const valid = core.isValidChildOf(node, parent);
+                    if (valid !== true) {
+                        const msg = typeof valid === "object" && valid !== null && (valid as any).message != null
+                            ? String((valid as any).message)
+                            : "Node is not a valid child of its parent (containment rule violation).";
+                        add(path, msg, "containment");
+                    }
+                }
+
+                const pointerNames: string[] = typeof core.getPointerNames === "function" ? (core.getPointerNames(node) || []) : [];
+                for (const name of pointerNames) {
+                    const targetPath = typeof core.getPointerPath === "function" ? core.getPointerPath(node, name) : null;
+                    if (targetPath) {
+                        const target = await core.loadByPath(root, targetPath);
+                        if (target && typeof core.isValidTargetOf === "function") {
+                            const valid = core.isValidTargetOf(target, node, name);
+                            if (valid !== true) {
+                                const msg = typeof valid === "object" && valid !== null && (valid as any).message != null
+                                    ? String((valid as any).message)
+                                    : "Pointer '" + name + "' targets a node that is not a valid target type.";
+                                add(path, msg, "pointer");
+                            }
+                        }
+                    }
+                }
+
+                const setNames: string[] = typeof core.getSetNames === "function" ? (core.getSetNames(node) || []) : [];
+                for (const setName of setNames) {
+                    const memberPaths: string[] = typeof core.getMemberPaths === "function" ? (core.getMemberPaths(node, setName) || []) : [];
+                    for (const memberPath of memberPaths) {
+                        const member = await core.loadByPath(root, memberPath);
+                        if (member && typeof core.isValidTargetOf === "function") {
+                            const valid = core.isValidTargetOf(member, node, setName);
+                            if (valid !== true) {
+                                const msg = typeof valid === "object" && valid !== null && (valid as any).message != null
+                                    ? String((valid as any).message)
+                                    : "Set '" + setName + "' contains a node that is not a valid member type.";
+                                add(path, msg, "set");
+                            }
+                        }
+                    }
+                }
+            }
+
+            async function walk(node: any, depth: number): Promise<void> {
+                if (depth > maxDepth) return;
+                await checkOne(node);
+                if (!includeChildren) return;
+                const childPaths: string[] = typeof core.getChildrenPaths === "function" ? (core.getChildrenPaths(node) || []) : [];
+                for (const p of childPaths) {
+                    const child = await core.loadByPath(root, p);
+                    if (child) await walk(child, depth + 1);
+                }
+            }
+
+            await walk(startNode, 0);
+
+            return {
+                data: {
+                    ok: violations.length === 0,
+                    scope: nodePathNorm === "/" || nodePathNorm === "" ? "project" : "subtree",
+                    nodePath: nodePathNorm,
+                    includeChildren,
+                    violationCount: violations.length,
+                    ...(violations.length > 0 ? { violations } : {}),
+                },
+            };
+        } catch (e: any) {
+            logToolFailure(ctx, "checkModelConsistency", args, e);
+            return { data: { error: (e && e.message) || String(e), ok: false } };
         }
     },
 };
@@ -1186,7 +1675,7 @@ export const getMetaInfo: Tool = {
                 },
             };
         } catch (e: any) {
-            ctx.logger.warn("getMetaInfo failed: " + (e && e.message));
+            logToolFailure(ctx, "getMetaInfo", _args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -1251,7 +1740,7 @@ export const setConceptPosition: Tool = {
                 data: { set: true, conceptPath, sheetSetId, x, y },
             };
         } catch (e: any) {
-            ctx.logger.warn("setConceptPosition failed: " + (e && e.message));
+            logToolFailure(ctx, "setConceptPosition", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -1336,7 +1825,7 @@ export const setConceptLayout: Tool = {
                 },
             };
         } catch (e: any) {
-            ctx.logger.warn("setConceptLayout failed: " + (e && e.message));
+            logToolFailure(ctx, "setConceptLayout", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -1349,10 +1838,17 @@ export const META_TOOLS: Tool[] = [
     isMetaNodeTool,
     createMetaNode,
     setMetaAttribute,
+    delMetaAttribute,
     setMetaContainment,
+    delMetaContainment,
     setMetaPointer,
+    delMetaPointer,
+    delMetaSet,
     setMetaSet,
     setMetaMixin,
+    delMetaMixin,
+    checkMetaConsistency,
+    checkModelConsistency,
     getMetaInfo,
     getDiagramLayout,
     setConceptPosition,

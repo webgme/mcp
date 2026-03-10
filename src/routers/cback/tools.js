@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.NEED_CLIENT_DATA_KEYS = void 0;
+exports.logToolFailure = logToolFailure;
 exports.commitCoreSession = commitCoreSession;
 exports.getToolsForContext = getToolsForContext;
 exports.getToolMap = getToolMap;
@@ -9,6 +10,12 @@ exports.getToolDefinitionsForLLM = getToolDefinitionsForLLM;
 exports.NEED_CLIENT_DATA_KEYS = {
     diagramLayout: "diagramLayout",
 };
+/** Use in tool catch blocks: info-level = tool name + error message; debug = full args. */
+function logToolFailure(ctx, toolName, args, err) {
+    const msg = (err && (err.message || err.toString())) || String(err);
+    ctx.logger.warn(toolName + " failed: " + msg.slice(0, 200));
+    ctx.logger.debug(toolName + " args: " + JSON.stringify(args));
+}
 /**
  * Persist the core state and make a commit on the project. Use after any server-side mutation.
  * Requires ctx.coreSession (project open with Core and root loaded).

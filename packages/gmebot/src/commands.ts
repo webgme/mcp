@@ -48,6 +48,7 @@ const HANDLERS: Record<string, CommandHandler> = {
     moveNode: cmdMoveNode,
     deleteNode: cmdDeleteNode,
     setAttribute: cmdSetAttribute,
+    setProperty: cmdSetProperty,
     getAttribute: cmdGetAttribute,
     clearAttribute: cmdClearAttribute,
     setRegistry: cmdSetRegistry,
@@ -411,6 +412,68 @@ function cmdClearAttribute(args: Record<string, any>, client: any, log: Logger):
             }
             core.persist(node);
             log("GMEBot", "Cleared attribute '" + name + "' on " + nodeId + ".");
+        });
+    });
+}
+
+function cmdSetProperty(args: Record<string, any>, client: any, log: Logger): void {
+    const nodeId: string = args.nodeId;
+    const name: string = args.name;
+    const value: string = args.value;
+    if (!client || !nodeId || name === undefined || value === undefined) {
+        log("GMEBot", "[setProperty: missing client, nodeId, name, or value]");
+        return;
+    }
+    client.getCoreInstance({}, function (err: any, result: any) {
+        if (err) {
+            log("GMEBot", "[setProperty: getCoreInstance failed: " + err.message + "]");
+            return;
+        }
+        const core = result.core;
+        const root = result.rootNode;
+        if (!core || !root) {
+            log("GMEBot", "[setProperty: no core or root]");
+            return;
+        }
+        loadNode(core, root, nodeId, function (errLoad: any, node: any) {
+            if (errLoad) {
+                log("GMEBot", "[setProperty: load node failed: " + (errLoad && errLoad.message) + "]");
+                return;
+            }
+            if (!node) {
+                log("GMEBot", "[setProperty: node not found: " + nodeId + "]");
+                return;
+            }
+            const attrNames = core.getAttributeNames(node) || [];
+            const regNames = core.getRegistryNames(node) || [];
+            if (attrNames.includes(name)) {
+                const res = core.setAttribute(node, name, value);
+                if (res) {
+                    log("GMEBot", "[setProperty setAttribute failed: " + (res as any).message + "]");
+                    return;
+                }
+                core.persist(node);
+                log("GMEBot", "Set property '" + name + "' (attribute) on " + nodeId + ".");
+            } else if (regNames.includes(name)) {
+                let valueToSet: any = value;
+                try {
+                    const parsed = JSON.parse(value);
+                    if (parsed !== null && typeof parsed === "object") valueToSet = parsed;
+                } catch {
+                    // keep string
+                }
+                client.startTransaction("setProperty");
+                client.setRegistry(nodeId, name, valueToSet, "setProperty");
+                client.completeTransaction("setProperty", function (errC: any) {
+                    if (errC) {
+                        log("GMEBot", "[setProperty setRegistry failed: " + errC.message + "]");
+                        return;
+                    }
+                    log("GMEBot", "Set property '" + name + "' (registry) on " + nodeId + ".");
+                });
+            } else {
+                log("GMEBot", "[setProperty: property '" + name + "' not found on " + nodeId + "]");
+            }
         });
     });
 }

@@ -75,6 +75,13 @@ export type ToolHandler = (
     ctx: ToolContext
 ) => Promise<ToolResult>;
 
+/** Use in tool catch blocks: info-level = tool name + error message; debug = full args. */
+export function logToolFailure(ctx: ToolContext, toolName: string, args: Record<string, any>, err: any): void {
+    const msg = (err && (err.message || err.toString())) || String(err);
+    ctx.logger.warn(toolName + " failed: " + msg.slice(0, 200));
+    ctx.logger.debug(toolName + " args: " + JSON.stringify(args));
+}
+
 /**
  * Persist the core state and make a commit on the project. Use after any server-side mutation.
  * Requires ctx.coreSession (project open with Core and root loaded).

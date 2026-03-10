@@ -1,4 +1,4 @@
-import { Tool } from "../tools";
+import { Tool, logToolFailure } from "../tools";
 
 const MASTER_BRANCH = "master";
 
@@ -43,7 +43,7 @@ export const listBranches: Tool = {
                 projectId,
             });
         } catch (e: any) {
-            ctx.logger.warn("listBranches openProject failed: " + (e && e.message));
+            logToolFailure(ctx, "listBranches", args, e);
             return { data: { error: "Failed to open project: " + (e && e.message) } };
         }
 
@@ -65,7 +65,7 @@ export const listBranches: Tool = {
                 },
             };
         } catch (e: any) {
-            ctx.logger.warn("listBranches getBranches failed: " + (e && e.message));
+            logToolFailure(ctx, "listBranches", args, e);
             return { data: { error: "Failed to get branches: " + (e && e.message) } };
         }
     },
@@ -120,7 +120,7 @@ export const createBranch: Tool = {
                 projectId,
             });
         } catch (e: any) {
-            ctx.logger.warn("createBranch openProject failed: " + (e && e.message));
+            logToolFailure(ctx, "createBranch", args, e);
             return { data: { error: "Failed to open project: " + (e && e.message) } };
         }
 
@@ -134,7 +134,7 @@ export const createBranch: Tool = {
                         : {};
                 fromCommitHash = branches[contextBranch];
             } catch (e: any) {
-                ctx.logger.warn("createBranch getBranches failed: " + (e && e.message));
+                logToolFailure(ctx, "createBranch", args, e);
                 return { data: { error: "Failed to get branch head for context branch: " + (e && e.message) } };
             }
             if (!fromCommitHash) {
@@ -149,7 +149,7 @@ export const createBranch: Tool = {
         try {
             await (project.createBranch(branchName, fromCommitHash) as Promise<any>);
         } catch (e: any) {
-            ctx.logger.warn("createBranch createBranch failed: " + (e && e.message));
+            logToolFailure(ctx, "createBranch", args, e);
             return { data: { error: "Failed to create branch: " + (e && e.message) } };
         }
 
@@ -271,7 +271,7 @@ export const deleteBranch: Tool = {
                 projectId,
             });
         } catch (e: any) {
-            ctx.logger.warn("deleteBranch openProject failed: " + (e && e.message));
+            logToolFailure(ctx, "deleteBranch", args, e);
             return { data: { error: "Failed to open project: " + (e && e.message) } };
         }
 
@@ -282,7 +282,7 @@ export const deleteBranch: Tool = {
                     ? await (project.getBranches() as Promise<Record<string, string>>)
                     : {};
         } catch (e: any) {
-            ctx.logger.warn("deleteBranch getBranches failed: " + (e && e.message));
+            logToolFailure(ctx, "deleteBranch", args, e);
             return { data: { error: "Failed to get branches: " + (e && e.message) } };
         }
 

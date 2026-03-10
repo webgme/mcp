@@ -53,10 +53,17 @@ Most branch tools are client-driven (they change or rely on client state). Only 
 | **isMetaNode** | Implemented | Check if a node (by path) is a META node (member of the global MetaAspectSet). Useful when choosing bases for new concepts. |
 | **createMetaNode** | Implemented | Create a new META concept under the project ROOT, based on an existing meta-node (default FCO), and add it to MetaAspectSet (and the first meta sheet if it exists). Runs on the server. |
 | **setMetaAttribute** | Implemented | Define or update an attribute’s META rule for a concept (wraps core.setAttributeMeta). Runs on the server. |
+| **delMetaAttribute** | Implemented | Remove an attribute's META rule from a concept (core.delAttributeMeta). Runs on the server. |
 | **setMetaContainment** | Implemented | Define META-level containment: a concept can contain instances of another (core.setChildMeta), with optional min/max. One call per (source, target). Runs on the server. |
+| **delMetaContainment** | Implemented | Remove a META containment rule (core.delChildMeta). sourcePath and targetPath required. Runs on the server. |
 | **setMetaPointer** | Implemented | Define a META-level pointer on a concept (at most one target per instance). Adds a valid target type; uses setPointerMetaTarget/setPointerMetaLimits. Runs on the server. |
+| **delMetaPointer** | Implemented | Remove a META-level pointer (or set) definition from a concept (core.delPointerMeta). conceptPath and pointerName required. Runs on the server. |
+| **delMetaSet** | Implemented | Remove a META-level set definition from a concept (core.delPointerMeta). conceptPath and setName required. Runs on the server. |
 | **setMetaSet** | Implemented | Define a META-level set on a concept (multiple targets). Adds a valid target type. Runs on the server. |
 | **setMetaMixin** | Implemented | Add a META mixin to a concept (inherits from another type). One call per (conceptPath, mixinPath). Runs on the server. |
+| **delMetaMixin** | Implemented | Remove a META mixin from a concept (core.delMember on _mixins). Runs on the server. |
+| **checkMetaConsistency** | Implemented | Run WebGME meta-layer consistency check (core.getMixinErrors on meta concepts). Use after meta modifications. For checking that instance nodes obey the meta rules, use checkModelConsistency. |
+| **checkModelConsistency** | Implemented | Run the constraint check on the project or a sub-tree: finds any element that violates the meta rules (containment, pointers, sets). Optional nodePath (default whole project) and includeChildren. After model changes, run for current scope using context.activeNodeId as nodePath. |
 | **getMetaInfo** | Implemented | Return a JSON summary of the meta: all concepts in MetaAspectSet (using getJsonMeta) and all named sheets with their SetIDs and the concepts they contain. Runs on the server. |
 
 ---

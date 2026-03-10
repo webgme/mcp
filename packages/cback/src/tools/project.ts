@@ -1,4 +1,4 @@
-import { Tool } from "../tools";
+import { Tool, logToolFailure } from "../tools";
 
 export const listSeeds: Tool = {
     definition: {
@@ -27,7 +27,7 @@ export const listSeeds: Tool = {
                 seedDict = engineUtils.getSeedDictionarySync(gmeConfig) || {};
             }
         } catch (e: any) {
-            ctx.logger.warn("listSeeds: failed to use engine utils: " + (e && e.message));
+            ctx.logger.debug("listSeeds: engine utils unavailable: " + (e && e.message));
         }
 
         const seeds = Object.keys(seedDict).sort();
@@ -95,7 +95,7 @@ export const createProject: Tool = {
                 },
             };
         } catch (e: any) {
-            ctx.logger.warn("createProject failed: " + (e && e.message));
+            logToolFailure(ctx, "createProject", args, e);
             return {
                 data: {
                     created: false,
@@ -146,7 +146,7 @@ export const deleteProject: Tool = {
                 },
             };
         } catch (e: any) {
-            ctx.logger.warn("deleteProject failed: " + (e && e.message));
+            logToolFailure(ctx, "deleteProject", args, e);
             return {
                 data: {
                     deleted: false,
@@ -183,7 +183,7 @@ export const listProjects: Tool = {
             info: true,
         });
 
-        ctx.logger.info("getProjects raw response: " + JSON.stringify(raw, null, 2));
+        ctx.logger.debug("listProjects raw response: " + JSON.stringify(raw, null, 2));
 
         const projects = raw.map((p: any) => {
             const id: string = p._id || "";

@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.BRANCH_TOOLS = exports.squashBranch = exports.deleteBranch = exports.switchBranch = exports.createBranch = exports.listBranches = void 0;
+const tools_1 = require("../tools");
 const MASTER_BRANCH = "master";
 /** List branches in a project (server-side). Uses context.projectId when projectId is omitted. */
 exports.listBranches = {
@@ -41,7 +42,7 @@ exports.listBranches = {
             });
         }
         catch (e) {
-            ctx.logger.warn("listBranches openProject failed: " + (e && e.message));
+            (0, tools_1.logToolFailure)(ctx, "listBranches", args, e);
             return { data: { error: "Failed to open project: " + (e && e.message) } };
         }
         try {
@@ -62,7 +63,7 @@ exports.listBranches = {
             };
         }
         catch (e) {
-            ctx.logger.warn("listBranches getBranches failed: " + (e && e.message));
+            (0, tools_1.logToolFailure)(ctx, "listBranches", args, e);
             return { data: { error: "Failed to get branches: " + (e && e.message) } };
         }
     },
@@ -114,7 +115,7 @@ exports.createBranch = {
             });
         }
         catch (e) {
-            ctx.logger.warn("createBranch openProject failed: " + (e && e.message));
+            (0, tools_1.logToolFailure)(ctx, "createBranch", args, e);
             return { data: { error: "Failed to open project: " + (e && e.message) } };
         }
         let fromCommitHash = args.fromCommitHash;
@@ -127,7 +128,7 @@ exports.createBranch = {
                 fromCommitHash = branches[contextBranch];
             }
             catch (e) {
-                ctx.logger.warn("createBranch getBranches failed: " + (e && e.message));
+                (0, tools_1.logToolFailure)(ctx, "createBranch", args, e);
                 return { data: { error: "Failed to get branch head for context branch: " + (e && e.message) } };
             }
             if (!fromCommitHash) {
@@ -142,7 +143,7 @@ exports.createBranch = {
             await project.createBranch(branchName, fromCommitHash);
         }
         catch (e) {
-            ctx.logger.warn("createBranch createBranch failed: " + (e && e.message));
+            (0, tools_1.logToolFailure)(ctx, "createBranch", args, e);
             return { data: { error: "Failed to create branch: " + (e && e.message) } };
         }
         return {
@@ -256,7 +257,7 @@ exports.deleteBranch = {
             });
         }
         catch (e) {
-            ctx.logger.warn("deleteBranch openProject failed: " + (e && e.message));
+            (0, tools_1.logToolFailure)(ctx, "deleteBranch", args, e);
             return { data: { error: "Failed to open project: " + (e && e.message) } };
         }
         let branches;
@@ -267,7 +268,7 @@ exports.deleteBranch = {
                     : {};
         }
         catch (e) {
-            ctx.logger.warn("deleteBranch getBranches failed: " + (e && e.message));
+            (0, tools_1.logToolFailure)(ctx, "deleteBranch", args, e);
             return { data: { error: "Failed to get branches: " + (e && e.message) } };
         }
         const branchHash = branches[branchName];

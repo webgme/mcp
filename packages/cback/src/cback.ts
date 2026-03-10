@@ -20,30 +20,62 @@ const SYSTEM_PROMPT =
     "You are GMEBot, an assistant embedded in a WebGME modeling environment. " +
     "You help users manage their projects and metamodels. " +
     "You have tools available — always call them instead of guessing. " +
-    "A single user message often asks for multiple things (e.g. 'create concept X and add a pointer to Y', or 'new concept with three pointers'). You MUST fulfill every part of the request: use as many tool calls as needed, or use createMetaNode with its optional 'contains', 'pointers', and 'sets' arrays to do concept + relations in one call. Do not stop after one tool call and reply until all requested actions are done. For connection, link, or edge concepts use exactly pointer names 'src' and 'dst' (not source/destination/from/to). Example: pointers: [{ pointerName: 'src', targetPath: 'X' }, { pointerName: 'dst', targetPath: 'Y' }]. " +
+    "A single user message often asks for multiple things (e.g. 'create concept X and add a pointer to Y', or 'new concept with three pointers'). You MUST fulfill every part of the request: use as many tool calls as needed, or use createMetaNode with its optional 'contains', 'pointers', and 'sets' arrays to do concept + relations in one call. Do not stop after one tool call and reply until all requested actions are done. For connection, link, or edge concepts prefer pointer names 'src' and 'dst' so WebGME shows them as connections; you can use any order. The backend maps source/from/origin to src and destination/to/sink to dst if you use those words. Example: pointers: [{ pointerName: 'src', targetPath: 'X' }, { pointerName: 'dst', targetPath: 'Y' }]. " +
     "For example, call listProjects to see projects, listSeeds to see seeds, " +
     "createProject to create one, and switchProject to navigate to one. " +
     "Each tool returns JSON data. Present the results clearly to the user. " +
+    "When referring to nodes in your replies to the user, use a consistent format: Name (path), e.g. 'StateMachine (/1/2)' or 'FCO (/1)'. The name is human-readable; the path in parentheses is the operational identifier. Use this format when summarizing tool results (moveNode, createNode, findNodesByName, etc.) so the user sees the friendly name while the path remains available for disambiguation. For tool parameters, always pass the path. " +
     "If a tool returns an error or 'not implemented', tell the user. " +
     "When the client sends current context (projectId, branchName, activeNodeId), that is the user's open project and selection. " +
     "Use that as the default when the user does not specify a project or node — do not ask them to choose a project unless they explicitly want to switch or create one. " +
     "For tool calls, omit optional parameters when the user did not specify them; the backend will use default values. " +
     "If the user asks to 'create a node' or 'add a node' without giving type or parent, call createNode with no arguments (empty object) and do not ask them for type or parent. " +
     "In WebGME, FCO means First Class Object (not Foundation Class Object). " +
-    "When the user says 'set the X to Y' or 'set X of the node to Y' (e.g. set the position to 400 400, set the name to MyNode), you MUST call getPropertyNames first. Look at the response: if the property is in the 'registry' array you MUST use setRegistry; if it is in the 'attributes' array you MUST use setAttribute. Never use setAttribute for a property that is in registry (e.g. position is always in registry — use setRegistry). " +
-    "When the user refers to a node by name (e.g. 'the node named X', 'set position of MyNode'), call findNodesByName first. The response includes nodePaths. You MUST then pass one of those nodePaths as the nodeId parameter in every following tool call that targets that node (getPropertyNames, setAttribute, setRegistry). Do not omit nodeId when you have a path from findNodesByName. " +
-    "When setting a property, use the same format as the current value in getPropertyNames (attributeValues or registryValues); if the value is empty, use valueFormats when provided. " +
+    "For property access: use getProperty to list or read a property, setProperty to set. The backend resolves attributes vs registry (attributes have priority). When the user says 'set', 'change', 'rename', 'modify' (e.g. 'rename X to Y', 'set position to 400 400'), call getProperty with no name first to see available properties and value formats, then setProperty. " +
+    "When the user refers to a node by name (e.g. 'the node named X', 'set position of MyNode'), call findNodesByName first. Pass one of the returned nodePaths as nodeId in getProperty and setProperty. This applies to META concept nodes too: use findNodesByName, then getProperty and setProperty to change values. " +
+    "Usual flow: get paths first (findNodesByName), then manipulate. For moveNode: get paths for node and container, then moveNode. For deleteNode, getProperty, setProperty: obtain paths from findNodesByName when the user refers by name. " +
+    "When the user says 'change', 'set', 'modify', or 'rename' an attribute of a concept (e.g. 'rename Folder to MyFolder'), use node tools: findNodesByName, getProperty, setProperty. Do NOT use setMetaAttribute for that. Use setMetaAttribute only when defining the attribute rule (e.g. 'define the type of attribute name'). " +
+    "When setting a property, use the format from getProperty (attributeValues/registryValues or valueFormats). " +
     "When the user wants to select a node, go to a node, or switch the visualizer (e.g. 'select node X', 'go to the root', 'switch to the diagram'), use setClientState with activeNodeId and/or visualizerId. " +
     "Always get the path from a tool first: for 'switch to FCO' or 'go to FCO context', call findNodesByName with name 'FCO', then setClientState with one of the returned nodePaths as activeNodeId. For other nodes by name, call findNodesByName first. For root use '/'. Do not guess paths — use only paths from tool responses. " +
+    "Path vs name: parameters that accept path or name (conceptPath, sourcePath, targetPath, basePath, nodePath, etc.): treat a value as a path ONLY if it begins with '/' or if it cannot be found when used as a name. Otherwise pass it as a name—the backend resolves names. Example: 'Folder' and 'FCO' are concept names, not paths; use them as-is (no leading slash). Paths are project-specific (e.g. /1, /1/2) and come from getMetaInfo or findNodesByName. " +
     "For META containment (setMetaContainment): each call defines exactly one containment edge (one source concept, one target concept). The source must be the concept that is the container in the user's description (e.g. for 'SM contains S and T', source is SM, not FCO). Do not use FCO as source unless the user explicitly says FCO is the container; FCO is the root base type. If one container concept should contain multiple types, call setMetaContainment separately for each pair: e.g. (sourcePath=/SM, targetPath=/S) then (sourcePath=/SM, targetPath=/T). When the user says 'any' cardinality or does not specify cardinality, do not send min or max—omit both parameters. For pointers use setMetaPointer (cardinality 0..1 is fixed; no min/max arguments). For sets (multiple targets) use setMetaSet; for mixins use setMetaMixin. For all META relationship tools, path parameters accept either absolute paths (e.g. /FCO, /MyConcept) or concept names: when the user refers to concepts by name (no leading slash), pass the name as-is—the backend resolves names to paths. " +
-    "When the user asks to create a 'concept', 'meta concept', 'type', 'metamodel element', or 'new type' (a new META type, not an instance in the model), use createMetaNode, not createNode. createNode creates instance nodes in the model; createMetaNode defines new concepts in the metamodel. For a concept that should contain other types (e.g. 'Folder that can contain FCO'), or have pointers or sets, use createMetaNode with the optional 'contains', 'pointers', and 'sets' arrays so creation and all relations are done in one call. For createMetaNode basePath: pass the base concept's **name** (e.g. FCO) or omit to use FCO. Do NOT pass /FCO as a path—in WebGME the path of the FCO concept is project-specific (e.g. /1). The backend accepts either a concept name or a path from getMetaInfo (concepts[].path); it resolves names to the correct path. For connection, link, or edge concepts (that connect two nodes), WebGME expects two pointers named 'src' (source) and 'dst' (destination). When the user asks for such a concept, create it with pointers named exactly 'src' and 'dst' (each with the appropriate target concept). Never use other names like 'source', 'destination', 'from', 'to' for connection pointers.";
+    "When the user asks to create a 'concept', 'meta concept', 'type', 'metamodel element', or 'new type' (a new META type, not an instance in the model), use createMetaNode, not createNode. createNode creates instance nodes in the model; createMetaNode defines new concepts in the metamodel. For a concept that should contain other types (e.g. 'Folder that can contain FCO'), or have pointers or sets, use createMetaNode with the optional 'contains', 'pointers', and 'sets' arrays so creation and all relations are done in one call. For createMetaNode basePath: pass the base concept's **name** (e.g. FCO) or omit to use FCO. Do NOT pass /FCO as a path—in WebGME the path of the FCO concept is project-specific (e.g. /1). The backend accepts either a concept name or a path from getMetaInfo (concepts[].path); it resolves names to the correct path. For connection, link, or edge concepts (that connect two nodes), prefer pointer names 'src' and 'dst' so WebGME visualizes them as connections; keep whatever order is meaningful (e.g. src=source end, dst=target end). The backend maps source/from/destination/to to src/dst when you use those words. When the user asks for such a concept, create it with pointers 'src' and 'dst' (or use the synonym words; order is preserved). After any meta modification (createMetaNode, setMetaContainment, setMetaPointer, setMetaSet, setMetaMixin, or their del* tools), run checkMetaConsistency as a safety check and report the result (ok or violations) to the user. To check that the instance model obeys the meta rules (e.g. containment, pointers), run checkModelConsistency on the project or a sub-tree and report any violations. After any model changes (createNode, moveNode, deleteNode, setProperty, setPointer, etc.), run checkModelConsistency for the current scope: pass the active node path (context.activeNodeId from the client) as nodePath with includeChildren true, so the subtree under the user's selection is validated; if no activeNodeId is available, run it on the whole project (omit nodePath or use '/').";
 
 const MAX_TOOL_ROUNDS = 5; // default; override with CBACK_MAX_TOOL_ROUNDS env
+
+/** Default timeout for a single LLM request (ms). 0 = no timeout. Override with CBACK_LLM_REQUEST_TIMEOUT_MS. */
+const DEFAULT_LLM_REQUEST_TIMEOUT_MS = 120000; // 2 minutes
+
+/** Wrap a promise so it rejects after ms with message. Clears timer on settle. */
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+    if (ms <= 0) return promise;
+    return new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error(message)), ms);
+        promise.then(
+            (v) => { clearTimeout(t); resolve(v); },
+            (e) => { clearTimeout(t); reject(e); }
+        );
+    });
+}
 
 /** Keep only system + last N messages to avoid unbounded token growth (e.g. 7k+ on a simple request). */
 const MAX_HISTORY_MESSAGES = 40;
 /** Cap size of tool result content in history (chars) to limit tokens. */
 const MAX_TOOL_RESULT_CHARS = 2500;
+
+/** Build a stable fingerprint of tool_calls to detect repeated identical rounds (loop guard). */
+function getToolCallsFingerprint(toolCalls: any[]): string {
+    if (!toolCalls || toolCalls.length === 0) return "";
+    const parts = toolCalls.map((c: any) => {
+        const name = (c.function && c.function.name) ? String(c.function.name) : "";
+        const args = c.function && c.function.arguments;
+        const argsStr = typeof args === "string" ? args : (args != null ? JSON.stringify(args) : "");
+        return name + ":" + argsStr.slice(0, 400);
+    });
+    parts.sort();
+    return parts.join(" | ");
+}
 
 /** Match only when "project" is explicitly mentioned — avoid matching "switch to the diagram" etc. */
 const SWITCH_PROJECT_PATTERN = /\b(switch|open|go to|change to|load)\s+(?:to\s+)?project\b|(?:switch|open)\s+project\b|\bswitchProject\b/i;
@@ -108,6 +140,95 @@ async function ensureProjectListInContext(
 }
 
 const sessions = new Map<string, ChatMessage[]>();
+
+/** Logging: info = event + main context (e.g. tool name, node path); debug = full parameters/payloads. */
+const TOOL_CONTEXT_KEYS = [
+    "nodePath", "nodeId", "containerPath", "projectId", "path", "name", "conceptPath",
+    "sourcePath", "targetPath", "message", "setId", "branchName", "activeNodeId", "container",
+] as const;
+const MAX_CONTEXT_VAL = 80;
+
+function toolArgsContext(args: Record<string, any>): string {
+    const parts: string[] = [];
+    for (const k of TOOL_CONTEXT_KEYS) {
+        const v = args[k];
+        if (v === undefined || v === null) continue;
+        const s = typeof v === "string" ? v : JSON.stringify(v);
+        parts.push(k + "=" + (s.length > MAX_CONTEXT_VAL ? s.slice(0, MAX_CONTEXT_VAL) + "…" : s));
+    }
+    return parts.length ? parts.join(" ") : "(no args)";
+}
+
+function logChatRequest(log: any, userId: string, context: any, messageLen: number): void {
+    const ctx = context && typeof context === "object" ? context : {};
+    const parts = ["userId=" + userId, "messageLen=" + messageLen];
+    if (ctx.projectId) parts.push("projectId=" + ctx.projectId);
+    if (ctx.activeNodeId) parts.push("activeNodeId=" + ctx.activeNodeId);
+    log.info("chat_request " + parts.join(" "));
+}
+
+function logChatRequestDebug(log: any, body: any): void {
+    log.debug("chat_request payload: " + JSON.stringify(body));
+}
+
+function logLlmRequest(log: any, round: number): void {
+    log.info("llm_request round=" + round);
+}
+
+function logLlmRequestDebug(log: any, round: number, historyLength: number): void {
+    log.debug("llm_request round=" + round + " historyMessages=" + historyLength);
+}
+
+function logLlmResponse(log: any, round: number, msg: any): void {
+    if (msg.tool_calls && msg.tool_calls.length > 0) {
+        const names = msg.tool_calls.map((c: any) => c.function?.name || "?").join(",");
+        log.info("llm_response round=" + round + " tool_calls=" + msg.tool_calls.length + " " + names);
+    } else {
+        const len = typeof msg.content === "string" ? msg.content.length : 0;
+        log.info("llm_response round=" + round + " contentLen=" + len);
+    }
+}
+
+function logLlmResponseDebug(log: any, round: number, msg: any): void {
+    if (msg.tool_calls && msg.tool_calls.length > 0) {
+        const summary = msg.tool_calls.map((c: any) => ({
+            name: c.function?.name,
+            args: c.function?.arguments != null ? String(c.function.arguments).slice(0, 200) : "",
+        }));
+        log.debug("llm_response round=" + round + " tool_calls: " + JSON.stringify(summary));
+    } else {
+        log.debug("llm_response round=" + round + " content: " + (msg.content || "").slice(0, 500));
+    }
+}
+
+function logToolCall(log: any, name: string, args: Record<string, any>): void {
+    log.info("tool_call " + name + " " + toolArgsContext(args));
+}
+
+function logToolCallDebug(log: any, name: string, args: Record<string, any>, ctx: ToolContext): void {
+    log.debug("tool_call " + name + " args=" + JSON.stringify(args) + " hasCoreSession=" + !!ctx.coreSession +
+        " context=" + JSON.stringify(ctx.context));
+}
+
+function logToolResponse(log: any, name: string, result: any, err?: Error): void {
+    if (err) {
+        log.info("tool_response " + name + " error " + (err.message || String(err)).slice(0, 120));
+        return;
+    }
+    const error = result && result.error;
+    if (error) {
+        log.info("tool_response " + name + " error " + String(error).slice(0, 120));
+        return;
+    }
+    const path = result && (result.path ?? result.nodePath ?? result.createdPath);
+    const extra = path != null ? " path=" + String(path).slice(0, MAX_CONTEXT_VAL) : "";
+    log.info("tool_response " + name + " ok" + extra);
+}
+
+function logToolResponseDebug(log: any, name: string, result: any): void {
+    const str = JSON.stringify(result);
+    log.debug("tool_response " + name + " " + (str.length > 2000 ? str.slice(0, 2000) + "…" : str));
+}
 
 function getSession(userId: string): ChatMessage[] {
     if (!sessions.has(userId)) {
@@ -200,6 +321,13 @@ function initialize(middlewareOpts: MiddlewareOptions) {
         return Number.isInteger(n) && n >= 1 && n <= 50 ? n : MAX_TOOL_ROUNDS;
     })();
 
+    const llmRequestTimeoutMs = (() => {
+        const raw = process.env.CBACK_LLM_REQUEST_TIMEOUT_MS;
+        if (raw === undefined || raw === "") return DEFAULT_LLM_REQUEST_TIMEOUT_MS;
+        const n = parseInt(raw, 10);
+        return Number.isInteger(n) && n >= 0 ? n : DEFAULT_LLM_REQUEST_TIMEOUT_MS;
+    })();
+
     const useAnthropic = llmProvider === "anthropic" && !!anthropicApiKey;
     const useGroq = llmProvider === "groq" && !!groqApiKey;
     const useOpenAI = llmProvider === "openai" && !!openaiApiKey;
@@ -259,14 +387,8 @@ function initialize(middlewareOpts: MiddlewareOptions) {
         /** Context is provided by the client only (active node, project, branch). Server never gathers or stores it. */
         const context = req.body?.context;
 
-        if (context && typeof context === "object") {
-            logger.debug("chat context from client: " + JSON.stringify(context));
-        }
-
-        logger.info("chat payload received: " + JSON.stringify({
-            message: userMessage,
-            context: context,
-        }, null, 2));
+        logChatRequest(logger, userId, context, typeof userMessage === "string" ? userMessage.length : 0);
+        logChatRequestDebug(logger, { message: userMessage, context });
 
         if (!userMessage || typeof userMessage !== "string") {
             res.status(400).json({ error: "Missing 'message' in request body" });
@@ -335,27 +457,29 @@ function initialize(middlewareOpts: MiddlewareOptions) {
             trimHistory(history, MAX_HISTORY_MESSAGES);
 
             let rounds = 0;
+            let lastRoundFingerprint: string | null = null;
             const commands: ClientCommand[] = [];
-
-            logger.debug("chat request from " + userId + ": " + userMessage);
 
             while (rounds < maxToolRounds) {
                 rounds++;
 
-                logger.debug("llm round " + rounds);
-                const result = useAnthropic
-                    ? await anthropicChatCompletion(history, toolDefs, { apiKey: anthropicApiKey!, model: anthropicModel })
+                logLlmRequest(logger, rounds);
+                logLlmRequestDebug(logger, rounds, history.length);
+                const completionPromise = useAnthropic
+                    ? anthropicChatCompletion(history, toolDefs, { apiKey: anthropicApiKey!, model: anthropicModel })
                     : useGroq
-                        ? await openaiChatCompletion(history, toolDefs, { apiKey: groqApiKey!, model: groqModel, baseUrl: GROQ_BASE_URL })
+                        ? openaiChatCompletion(history, toolDefs, { apiKey: groqApiKey!, model: groqModel, baseUrl: GROQ_BASE_URL })
                         : useOpenAI
-                            ? await openaiChatCompletion(history, toolDefs, { apiKey: openaiApiKey!, model: openaiModel, baseUrl: OPENAI_BASE_URL })
-                            : await ollamaChatCompletion(history, toolDefs, ollamaConfig);
+                            ? openaiChatCompletion(history, toolDefs, { apiKey: openaiApiKey!, model: openaiModel, baseUrl: OPENAI_BASE_URL })
+                            : ollamaChatCompletion(history, toolDefs, ollamaConfig);
+                const timeoutMessage = "LLM request timed out after " + (llmRequestTimeoutMs / 1000) + "s.";
+                const result = await withTimeout(completionPromise, llmRequestTimeoutMs, timeoutMessage);
                 const msg = result.message;
 
                 if (result.usage) {
                     logger.info(
-                        "cback tokens round " + rounds + ": prompt=" + result.usage.prompt_tokens +
-                        " completion=" + result.usage.completion_tokens +
+                        "llm_usage round=" + rounds + " prompt_tokens=" + result.usage.prompt_tokens +
+                        " completion_tokens=" + result.usage.completion_tokens +
                         (result.usage.total_tokens != null ? " total=" + result.usage.total_tokens : "")
                     );
                 }
@@ -363,7 +487,8 @@ function initialize(middlewareOpts: MiddlewareOptions) {
                 history.push(msg);
 
                 if (!msg.tool_calls || msg.tool_calls.length === 0) {
-                    logger.debug("reply: " + (msg.content || "").substring(0, 120));
+                    logLlmResponse(logger, rounds, msg);
+                    logLlmResponseDebug(logger, rounds, msg);
                     const response: any = { reply: msg.content };
                     if (commands.length > 0) {
                         response.commands = commands;
@@ -375,36 +500,41 @@ function initialize(middlewareOpts: MiddlewareOptions) {
                     return;
                 }
 
+                const roundFingerprint = getToolCallsFingerprint(msg.tool_calls);
+                if (roundFingerprint && roundFingerprint === lastRoundFingerprint) {
+                    history.pop();
+                    logger.warn("chat loop_guard userId=" + userId + " round=" + rounds + " repeated tool calls");
+                    res.json({
+                        reply: "Stopped: the same tool calls were repeated without progress. Please try rephrasing your request or a different approach.",
+                        loopGuard: true,
+                    });
+                    return;
+                }
+                lastRoundFingerprint = roundFingerprint;
+
                 const toolResultsThisRound: { content: string; tool_call_id: string }[] = [];
                 let needClientDataKey: string | null = null;
 
                 for (const call of msg.tool_calls) {
                     const rawArgs = call.function.arguments;
-                    logger.debug("tool call: " + call.function.name +
-                        "(" + JSON.stringify(rawArgs) + ")");
-
                     let args: Record<string, any> = {};
                     if (typeof rawArgs === "string") {
                         try {
                             args = JSON.parse(rawArgs);
                         } catch (parseErr: any) {
-                            logger.warn("tool arguments invalid JSON (" + call.function.name + "): " +
-                                parseErr.message + "; raw=" + String(rawArgs).slice(0, 80));
+                            logger.warn("tool_call " + call.function.name + " invalid JSON: " + parseErr.message);
+                            logger.debug("tool_call " + call.function.name + " raw args: " + String(rawArgs).slice(0, 200));
                             args = {};
                         }
                     } else if (rawArgs && typeof rawArgs === "object") {
                         args = rawArgs;
                     }
 
+                    logToolCall(logger, call.function.name, args);
+                    logToolCallDebug(logger, call.function.name, args, toolCtx);
+
                     const handler = toolMap.get(call.function.name);
                     let toolResult: any;
-
-                    logger.info("tool received: " + call.function.name + " args=" + JSON.stringify(args) +
-                        " ctx=" + JSON.stringify({
-                            userId: toolCtx.userId,
-                            context: toolCtx.context,
-                            hasCoreSession: !!toolCtx.coreSession,
-                        }));
 
                     if (handler) {
                         try {
@@ -417,19 +547,16 @@ function initialize(middlewareOpts: MiddlewareOptions) {
                                 toolResult.needClientData === NEED_CLIENT_DATA_KEYS.diagramLayout) {
                                 needClientDataKey = toolResult.needClientData;
                             }
-                            const resultStr = JSON.stringify(toolResult);
-                            const resultPreview = resultStr.length > 2000
-                                ? resultStr.substring(0, 2000) + "... (truncated)"
-                                : resultStr;
-                            logger.info("tool response: " + call.function.name + " -> " + resultPreview);
-                            logger.debug("tool result: " + resultStr);
+                            logToolResponse(logger, call.function.name, toolResult);
+                            logToolResponseDebug(logger, call.function.name, toolResult);
                         } catch (err: any) {
-                            logger.warn("tool error (" + call.function.name + "): " +
-                                err.message);
+                            logToolResponse(logger, call.function.name, {}, err);
+                            logger.debug("tool_response " + call.function.name + " error stack: " + (err.stack || ""));
                             toolResult = { error: err.message };
                         }
                     } else {
-                        logger.warn("unknown tool: " + call.function.name);
+                        logger.warn("tool_call " + call.function.name + " unknown tool");
+                        logToolResponse(logger, call.function.name, { error: "Unknown tool" });
                         toolResult = { error: `Unknown tool: ${call.function.name}` };
                     }
 
@@ -459,11 +586,19 @@ function initialize(middlewareOpts: MiddlewareOptions) {
                 }
             }
 
-            logger.warn("max tool rounds (" + maxToolRounds + ") reached for " + userId);
+            logger.warn("chat max_rounds userId=" + userId + " rounds=" + maxToolRounds);
             res.json({ reply: "Reached maximum tool call rounds without a final answer." });
         } catch (err: any) {
-            logger.error("chat error for " + userId + ": " + err.message);
-            logger.error(err.stack || err);
+            logger.error("chat_error userId=" + userId + " " + err.message);
+            logger.debug("chat_error stack: " + (err.stack || ""));
+            const isTimeout = err && err.message && String(err.message).indexOf("timed out") !== -1;
+            if (isTimeout) {
+                res.status(504).json({
+                    error: "The model took too long to respond.",
+                    reply: "The model took too long to respond. Please try again or use a smaller request.",
+                });
+                return;
+            }
             res.status(502).json({ error: err.message });
         }
     });
@@ -512,7 +647,8 @@ function initialize(middlewareOpts: MiddlewareOptions) {
                 const result = await handler(args, toolCtx);
                 res.json({ data: result.data, commands: result.commands });
             } catch (err: any) {
-                logger.warn("test/run-tool error: " + (err && err.message));
+                logger.warn("test run_tool error tool=" + toolName + " " + (err && err.message));
+                logger.debug("test run_tool args: " + JSON.stringify(args));
                 res.status(500).json({ error: (err && err.message) || String(err) });
             }
         });
