@@ -26,7 +26,7 @@ WebGME app with monorepo-managed extension packages.
 ### Configuration and deployment
 
 - WebGME loads **`config/config.<NODE_ENV>.js`** (see **`config/README.md`**). Example: **`NODE_ENV=jarvis`** uses `config.jarvis.js` (MongoDB URI for that stack).
-- LLM settings use **`LLM_*`** in `.env` (see **`.env.example`**). Do not commit API keys.
+- **`LLM_*`** in `.env` (see **`.env.example`**; use **`.env.<profile>.example`** when it matches **`config.<profile>.js`**, e.g. **`.env.jarvis.example`**). Do not commit API keys.
 - WebGME can still apply **`WEBGME_*`** overrides from the environment (see `config/index.js`).
 
 ## Monorepo Workflow
