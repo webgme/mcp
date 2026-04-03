@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.NODE_TOOLS = exports.getDiagramLayout = exports.bulkSet = exports.clearRegistry = exports.getRegistry = exports.setRegistry = exports.clearAttribute = exports.getAttribute = exports.setAttribute = exports.getPropertyNames = exports.setProperty = exports.getProperty = exports.findNodesByName = exports.deleteNode = exports.moveNode = exports.createNode = void 0;
+exports.NODE_TOOLS = exports.getDiagramLayout = exports.bulkSet = exports.clearRegistry = exports.getRegistry = exports.setRegistry = exports.clearAttribute = exports.getAttribute = exports.setAttribute = exports.getPropertyNames = exports.setProperty = exports.getProperty = exports.findNodesByName = exports.deleteNode = exports.listNodes = exports.moveNode = exports.createNode = void 0;
 const tools_1 = require("../tools");
 const DEFAULT_BASE_TYPE = "FCO";
 const PATH_SEP = "/";
@@ -276,6 +276,90 @@ exports.moveNode = {
         }
     },
 };
+/**
+ * Walk the model tree and collect paths + name attributes (authoritative vs diagram layout alone).
+ */
+async function collectNodesDepthFirst(core, root, startNode, maxDepth, depth, out) {
+    if (depth > maxDepth)
+        return;
+    const p = core.getPath(startNode);
+    out.push({
+        path: toDisplayPath(p),
+        name: core.getAttribute(startNode, "name") != null ? String(core.getAttribute(startNode, "name")) : "",
+    });
+    const children = await core.loadChildren(startNode);
+    for (const child of children) {
+        await collectNodesDepthFirst(core, root, child, maxDepth, depth + 1, out);
+    }
+}
+/** List nodes in the core tree — use when layout is not enough or the user asks what exists / bulk delete. */
+exports.listNodes = {
+    definition: {
+        name: "listNodes",
+        description: "List nodes in the WebGME **core tree** under a container (depth-first): path and name for each node in that subtree. " +
+            "Use for **model / subtree** scope: any multi-level hierarchy under a chosen parent (not only the whole project). " +
+            "For **diagram** scope (single level, current canvas), use getDiagramLayout instead. " +
+            "For **project** scope (everything), omit container or use '/'. Pass context.activeNodeId or a path when the user means a specific fragment of the model. deleteNode removes a node and all its descendants.",
+        parameters: {
+            type: "object",
+            properties: {
+                container: {
+                    type: "string",
+                    description: "Root of the subtree: path (e.g. /1/2) or name. Omit or '/' for the **entire project**. Use a deeper path or activeNodeId when the user refers to a **model context** that spans several levels but not the full tree.",
+                },
+                maxDepth: {
+                    type: "number",
+                    description: "Optional. Max depth below the container (default 40). Shrink if you only need a few levels under that subtree.",
+                },
+            },
+            required: [],
+        },
+    },
+    handler: async (args, ctx) => {
+        if (!ctx.coreSession) {
+            return {
+                data: {
+                    error: "Project context is required. Ensure a project is open and context is sent.",
+                },
+            };
+        }
+        const { core, root } = ctx.coreSession;
+        const raw = args.container;
+        const maxDepth = Math.min(Math.max(Number(args.maxDepth) || 40, 1), 100);
+        try {
+            let startNode;
+            if (raw == null || String(raw).trim() === "" || String(raw).trim() === "/") {
+                startNode = root;
+            }
+            else {
+                const resolved = await resolveNodePathOrName(core, root, raw);
+                if (!resolved) {
+                    return { data: { error: "Container not found (path or name): " + String(raw) } };
+                }
+                const np = resolved === core.getPath(root) ? "" : resolved;
+                startNode = np === "" ? root : await core.loadByPath(root, np);
+                if (!startNode) {
+                    return { data: { error: "Container not found at path: " + toDisplayPath(resolved) } };
+                }
+            }
+            const nodes = [];
+            await collectNodesDepthFirst(core, root, startNode, maxDepth, 0, nodes);
+            return {
+                data: {
+                    containerPath: toDisplayPath(core.getPath(startNode)),
+                    count: nodes.length,
+                    nodes,
+                    hint: "Scopes: diagram = getDiagramLayout; subtree = listNodes(container); project = listNodes('/'). " +
+                        "If findNodesByName count is 1, use that nodePath. For bulk delete on a subtree, pick container to match the user's model context.",
+                },
+            };
+        }
+        catch (e) {
+            (0, tools_1.logToolFailure)(ctx, "listNodes", args, e);
+            return { data: { error: (e && e.message) || String(e) } };
+        }
+    },
+};
 exports.deleteNode = {
     definition: {
         name: "deleteNode",
@@ -392,13 +476,15 @@ exports.findNodesByName = {
                 }
             }
             await search(startNode, 1);
-            return {
-                data: {
-                    name: searchName,
-                    nodePaths,
-                    count: nodePaths.length,
-                },
+            const data = {
+                name: searchName,
+                nodePaths,
+                count: nodePaths.length,
             };
+            if (nodePaths.length === 1) {
+                data.hint = "Single match — use this nodePath; no need to disambiguate.";
+            }
+            return { data };
         }
         catch (e) {
             (0, tools_1.logToolFailure)(ctx, "findNodesByName", args, e);
@@ -1238,9 +1324,11 @@ exports.bulkSet = {
 exports.getDiagramLayout = {
     definition: {
         name: "getDiagramLayout",
-        description: "Get the layout of the current diagram: node or concept paths (actual WebGME paths) with positions (x, y) and optional dimensions (width, height). " +
-            "When available, also returns connections (sourcePath, targetPath) for connectivity. Works for both model and meta editor; layout is taken from the active visualizer. " +
-            "Use when the user asks to arrange, align, or layout. Layout is collected from the client; if not yet available, the backend will request it and continue automatically.",
+        description: "Get the layout of the **current** diagram (active visualizer): **diagram scope** — one level, what is on the canvas. " +
+            "Returns paths with positions (x, y) and optional dimensions; connections when available. Model and meta editor. " +
+            "Use for arrange/align and for anything that means **only this diagram** (list/count/delete on-canvas nodes). " +
+            "For multi-level hierarchy under a specific model fragment, use listNodes with a container instead. " +
+            "Layout comes from the client; if not yet available, the backend requests it and continues.",
         parameters: {
             type: "object",
             properties: {},
@@ -1261,6 +1349,7 @@ exports.getDiagramLayout = {
 exports.NODE_TOOLS = [
     exports.createNode,
     exports.moveNode,
+    exports.listNodes,
     exports.deleteNode,
     exports.findNodesByName,
     exports.getProperty,

@@ -74,8 +74,9 @@ function getToolMap(gmeConfig) {
     }
     return map;
 }
-function getToolDefinitionsForLLM(gmeConfig, context) {
-    const tools = context ? getToolsForContext(gmeConfig, context) : getAllTools(gmeConfig);
+/** Always expose the full tool set to the LLM (no activeVisualizerId / context-based subset). */
+function getToolDefinitionsForLLM(gmeConfig, _context) {
+    const tools = getAllTools(gmeConfig);
     return tools.map((t) => ({
         type: "function",
         function: t.definition,

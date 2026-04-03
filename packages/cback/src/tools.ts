@@ -160,8 +160,9 @@ export function getToolMap(gmeConfig?: any): Map<string, ToolHandler> {
     return map;
 }
 
-export function getToolDefinitionsForLLM(gmeConfig: any | undefined, context?: ToolContext["context"]): object[] {
-    const tools = context ? getToolsForContext(gmeConfig, context) : getAllTools(gmeConfig);
+/** Always expose the full tool set to the LLM (no activeVisualizerId / context-based subset). */
+export function getToolDefinitionsForLLM(gmeConfig: any | undefined, _context?: ToolContext["context"]): object[] {
+    const tools = getAllTools(gmeConfig);
     return tools.map((t) => ({
         type: "function",
         function: t.definition,

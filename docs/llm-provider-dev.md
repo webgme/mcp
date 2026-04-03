@@ -19,6 +19,7 @@ So you maintain **one conceptual message model** in the app; only the wire forma
 | **`LLM_API_KEY`** | Bearer for openai-compatible APIs when required; Anthropic `x-api-key`. Optional for local openai servers without auth. |
 | **`LLM_MODEL`** | Model id. |
 | **`LLM_ANTHROPIC_VERSION`** | Optional Anthropic API version header (e.g. `2023-06-01`). |
+| **`LLM_HTTP_DEBUG`** | If `1`, `true`, or `yes`, logs each LLM HTTP request URL and response body (truncated) to stderr with prefix `[cback:llm:http]`. |
 
 Env → adapter config: **`resolveLlmFromEnv()`** in the same file.
 
