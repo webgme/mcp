@@ -7,7 +7,7 @@
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "clean": "npm run clean --workspaces --if-present",
-    "start": "node app.js",
+    "start": "node --env-file-if-exists=.env app.js",
     "test": "node ./node_modules/mocha/bin/mocha --recursive test",
     "apply": "node ./node_modules/webgme-engine/src/bin/apply.js",
     "diff": "node ./node_modules/webgme-engine/src/bin/diff.js",
@@ -27,8 +27,5 @@
     "chai": "^4.5.0",
     "mocha": "^5.2.0",
     "webgme": "^2.23.0"
-  },
-  "dependencies": {
-    "dotenv": "^16.4.5"
   }
 }

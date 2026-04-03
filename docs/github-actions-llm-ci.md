@@ -45,33 +45,21 @@ jobs:
         run: npm test -- test/routers/cback/chat-prompt.spec.js
 ```
 
-You can use the [setup-ollama](https://github.com/marketplace/actions/setup-ollama) action instead of the install script if you prefer. Adjust the model name to match what your cback config expects (see `packages/cback/src/ollama.ts` default `model`), or set it via config/env in CI.
+You can use the [setup-ollama](https://github.com/marketplace/actions/setup-ollama) action instead of the install script if you prefer. Adjust the model name to match what cback expects (defaults in **`packages/cback/src/llmAdapter.ts`**, overridable with **`LLM_MODEL`**), or set it via env in CI.
 
 ---
 
 ## Option B: Cloud LLM API (OpenAI, Groq, etc.)
 
-Use a hosted API so the runner does not run the model. You need an API key and a small code change so cback can call an HTTP API instead of Ollama.
+Use a hosted **OpenAI-compatible** API so the runner does not run a local model. cback uses **`LLM_BACKEND=openai`** with **`LLM_BASE_URL`** and **`LLM_API_KEY`** (see **`packages/cback/src/llmAdapter.ts`**).
 
-**Pros:** Fast, no model download; you can use a capable model (e.g. GPT-4, Claude).  
-**Cons:** Requires API key (store in GitHub Secrets), possible cost, and an adapter in your codebase.
+**Pros:** Fast, no model download; you can use a capable model.  
+**Cons:** Requires an API key (GitHub Secrets), possible cost.
 
-### 1. Add an OpenAI-compatible adapter
+### 1. GitHub Secrets and workflow
 
-Many providers (OpenAI, Groq, Azure, some open-source hosts) use an **OpenAI-compatible** chat completion API. Add a second implementation that:
-
-- Accepts the same `(messages, tools, config)`-style interface your router uses.
-- Sends `POST` to `config.apiUrl` (e.g. `https://api.openai.com/v1/chat/completions`) with `Authorization: Bearer <key>`.
-- Maps the response to your existing `ChatCompletionResult` (e.g. `message`, `tool_calls`).  
-  Note: OpenAI returns `tool_calls[].function.arguments` as a **string**; your loop already parses JSON, so either keep that or normalize in the adapter.
-
-Then in cback, choose the implementation from config/env (e.g. `LLM_BACKEND=ollama` vs `LLM_BACKEND=openai`, with `OPENAI_API_KEY` and optional `OPENAI_API_URL`).
-
-### 2. GitHub Secrets and workflow
-
-- In the repo: **Settings → Secrets and variables → Actions** add:
-  - `OPENAI_API_KEY` (or `GROQ_API_KEY`, etc., depending on provider).
-- In the workflow, pass them only when running E2E chat tests:
+- In the repo: **Settings → Secrets and variables → Actions** add a secret for your key (e.g. `LLM_API_KEY`).
+- In the workflow, pass env only when running E2E chat tests:
 
 ```yaml
 - name: Run tests (including E2E chat)
@@ -79,12 +67,13 @@ Then in cback, choose the implementation from config/env (e.g. `LLM_BACKEND=olla
     NODE_ENV: test
     OLLAMA_E2E: 1
     LLM_BACKEND: openai
-    OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-    # OPENAI_API_URL: https://api.openai.com/v1  # optional override
+    LLM_BASE_URL: https://api.openai.com/v1
+    LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+    LLM_MODEL: gpt-4o-mini
   run: npm test -- test/routers/cback/chat-prompt.spec.js
 ```
 
-(Exact env var names depend on how you implement the adapter.)
+For Groq, set `LLM_BASE_URL` to `https://api.groq.com/openai/v1` and use a Groq key.
 
 ### 3. Free/low-cost APIs that are OpenAI-compatible
 

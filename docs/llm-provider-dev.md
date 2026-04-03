@@ -1,72 +1,35 @@
 # LLM provider (dev)
 
-The cback chat router can use **Ollama** (local), **Groq** (free tier), **OpenAI**, or **Anthropic** as the LLM. Switch via environment variables.
+## Single client module
 
-## Default: Ollama (local)
+All LLM HTTP traffic is implemented in **`packages/cback/src/llmAdapter.ts`** (env parsing + requests; GMEBot “chat” routing stays in `cback.ts`).
 
-- Start Ollama and pull a model: `ollama serve`, `ollama pull qwen3:8b` (or the model in `packages/cback/src/ollama.ts`).
-- No env vars needed. The app talks to `http://127.0.0.1:11434`.
+- **GMEBot history** is always **OpenAI-shaped** `ChatMessage[]` (roles `system` / `user` / `assistant` / `tool`, `tool_calls` with string-or-object `function.arguments` in memory).
+- **`LLM_BACKEND=openai`** — POST to **`{LLM_BASE_URL}/chat/completions`** (OpenAI-compatible). Default base is local Ollama-style `http://127.0.0.1:11434/v1`.
+- **`LLM_BACKEND=anthropic`** — same `ChatMessage[]` in cback; **translation** to Anthropic’s request/response format happens **only inside `llmAdapter.ts`** at POST `{origin}/v1/messages`.
 
-## Groq (free tier, recommended for dev)
+So you maintain **one conceptual message model** in the app; only the wire format differs, in one file.
 
-- **Free tier:** No credit card required; high rate limits (e.g. 30 RPM, 14.4K requests/day for `llama-3.1-8b-instant`). Supports tool/function calling.
-- Get an API key at [console.groq.com](https://console.groq.com).
-- Set: `LLM_PROVIDER=groq`, `GROQ_API_KEY=<your-key>`
-- Optional: `GROQ_MODEL=llama-3.1-8b-instant` (default)
+## Environment variables (only these)
 
-**Quick setup:**
+| Variable | Meaning |
+|----------|---------|
+| **`LLM_BACKEND`** | `openai` (default) or `anthropic`. |
+| **`LLM_BASE_URL`** | Full OpenAI-compat base including `/v1` for **openai**. API **origin** for **anthropic** (e.g. `https://api.anthropic.com`). |
+| **`LLM_API_KEY`** | Bearer for openai-compatible APIs when required; Anthropic `x-api-key`. Optional for local openai servers without auth. |
+| **`LLM_MODEL`** | Model id. |
+| **`LLM_ANTHROPIC_VERSION`** | Optional Anthropic API version header (e.g. `2023-06-01`). |
 
-1. Go to [console.groq.com](https://console.groq.com), sign up, and create an API key (e.g. **API Keys → Create API Key**).
-2. Copy the key (starts with `gsk_`).
-3. **Option A — .env file (recommended):** In the project root, copy `.env.example` to `.env`, uncomment and set:
-   ```env
-   LLM_PROVIDER=groq
-   GROQ_API_KEY=gsk_YOUR_KEY_HERE
-   ```
-   Then run `npm start` as usual; the app loads `.env` automatically.
-4. **Option B — shell:** In your terminal, set env and start the app:
-   - **PowerShell:**  
-     `$env:LLM_PROVIDER = "groq"; $env:GROQ_API_KEY = "gsk_YOUR_KEY_HERE"; npm start`
-   - **Bash:**  
-     `export LLM_PROVIDER=groq GROQ_API_KEY=gsk_YOUR_KEY_HERE; npm start`
-5. Open the app in the browser, open a project, and use GMEBot — chat will go through Groq.
-6. To confirm: **GET** `http://localhost:PORT/cback/config` (or your server URL) and check `llm.provider === "groq"`.
+Env → adapter config: **`resolveLlmFromEnv()`** in the same file.
 
-## OpenAI
+If **`LLM_BACKEND=anthropic`** but **`LLM_API_KEY`** is missing, cback **falls back** to **`LLM_BACKEND=openai`** with the default local base and logs a warning.
 
-- **Free trial:** About $5 credit for new users (one-time, ~3 months), then paid.
-- Set: `LLM_PROVIDER=openai`, `OPENAI_API_KEY=<your-key>`
-- Optional: `OPENAI_MODEL=gpt-4o-mini` (default) or `gpt-3.5-turbo`
+Other knobs: **`CBACK_MAX_TOOL_ROUNDS`**, **`CBACK_LLM_REQUEST_TIMEOUT_MS`**.
 
-## Anthropic
+## `/cback/config`
 
-- **Trial:** About $5 free credit on signup, then paid.
-- Set: `LLM_PROVIDER=anthropic`, `ANTHROPIC_API_KEY=<your-key>`
-- Optional: `ANTHROPIC_MODEL=claude-3-5-haiku-20241022` (default)
-- Get a key at [console.anthropic.com](https://console.anthropic.com).
+Returns **`llm.backend`**: `openai` | `anthropic`, plus `model`, **`baseUrl`** (openai) or **`apiBase`** (anthropic). If anthropic was requested without a key, **`fallbackFromAnthropic: true`** appears on the **openai** payload.
 
-## Fallback
+## Note on “true” single wire format
 
-If you set `LLM_PROVIDER=groq` (or `openai` / `anthropic`) but the corresponding API key is missing, the server falls back to Ollama and logs a warning.
-
-## Check which provider is active
-
-- **GET /cback/config** returns `llm: { provider: "groq"|"openai"|"anthropic"|"ollama", model?, host?, port? }`.
-
-## Tests
-
-Tests do **not** use the LLM by default. E2E chat tests (when you set `OLLAMA_E2E=1`) still assume a running Ollama unless you configure a cloud provider in the test env.
-
----
-
-## Token usage and compression
-
-**Monitoring:** When using Groq, OpenAI, or Anthropic, the server logs token usage per round, e.g.  
-`cback tokens round 1: prompt=1234 completion=56 total=1290`.  
-The chat API response also includes a `usage` object when the provider reports it: `{ prompt_tokens, completion_tokens, total_tokens? }` so the client can display it.
-
-**Compression (server-side):**
-- **History cap:** Only the last 40 messages (including system) are sent to the LLM. Older turns are dropped so long sessions don’t grow without bound.
-- **Tool result truncation:** Tool results stored in history are truncated to 2500 characters; the rest is replaced with ` [truncated]` so large JSON (e.g. from getMetaInfo or listProjects) doesn’t dominate the context.
-
-To tune: edit `MAX_HISTORY_MESSAGES` and `MAX_TOOL_RESULT_CHARS` in `packages/cback/src/cback.ts`, then rebuild.
+Anthropic’s public API is **not** OpenAI chat-completions. The **app** still uses one message shape end-to-end; **`llmAdapter.ts`** is the only place that maps to Anthropic’s blocks. To use **only** OpenAI-compatible HTTP in production, run **`LLM_BACKEND=openai`** (any host exposing `/v1/chat/completions`).

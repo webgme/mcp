@@ -1,7 +1,5 @@
 import express, { Request, Response, NextFunction } from "express";
-import { chatCompletion as ollamaChatCompletion, ChatMessage, OllamaConfig, DEFAULT_CONFIG } from "./ollama";
-import { chatCompletion as anthropicChatCompletion, DEFAULT_ANTHROPIC_MODEL } from "./anthropic";
-import { chatCompletion as openaiChatCompletion, DEFAULT_GROQ_MODEL, DEFAULT_OPENAI_MODEL, GROQ_BASE_URL, OPENAI_BASE_URL } from "./openai";
+import { chatCompletion, ChatMessage, resolveLlmFromEnv } from "./llmAdapter";
 import { getToolDefinitionsForLLM, getToolMap, ToolContext, ClientCommand, ToolHandler, NEED_CLIENT_DATA_KEYS } from "./tools";
 
 const router = express.Router();
@@ -305,14 +303,7 @@ function initialize(middlewareOpts: MiddlewareOptions) {
     const ensureAuthenticated = middlewareOpts.ensureAuthenticated;
     const getUserId = middlewareOpts.getUserId;
 
-    const ollamaConfig: OllamaConfig = { ...DEFAULT_CONFIG };
-    const llmProvider = (process.env.LLM_PROVIDER || "ollama").toLowerCase();
-    const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
-    const anthropicModel = process.env.ANTHROPIC_MODEL || DEFAULT_ANTHROPIC_MODEL;
-    const groqApiKey = process.env.GROQ_API_KEY;
-    const groqModel = process.env.GROQ_MODEL || DEFAULT_GROQ_MODEL;
-    const openaiApiKey = process.env.OPENAI_API_KEY;
-    const openaiModel = process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL;
+    const { config: llmAdapterConfig, usedFallbackFromAnthropic } = resolveLlmFromEnv();
 
     const maxToolRounds = (() => {
         const raw = process.env.CBACK_MAX_TOOL_ROUNDS;
@@ -328,25 +319,13 @@ function initialize(middlewareOpts: MiddlewareOptions) {
         return Number.isInteger(n) && n >= 0 ? n : DEFAULT_LLM_REQUEST_TIMEOUT_MS;
     })();
 
-    const useAnthropic = llmProvider === "anthropic" && !!anthropicApiKey;
-    const useGroq = llmProvider === "groq" && !!groqApiKey;
-    const useOpenAI = llmProvider === "openai" && !!openaiApiKey;
-
-    if (useAnthropic) {
-        logger.info("cback LLM: anthropic (model=" + anthropicModel + ")");
-    } else if (useGroq) {
-        logger.info("cback LLM: groq (model=" + groqModel + ")");
-    } else if (useOpenAI) {
-        logger.info("cback LLM: openai (model=" + openaiModel + ")");
+    if (usedFallbackFromAnthropic) {
+        logger.warn("LLM_BACKEND=anthropic but LLM_API_KEY not set; using openai backend at default local base URL");
+    }
+    if (llmAdapterConfig.backend === "anthropic") {
+        logger.info("cback LLM: anthropic (model=" + llmAdapterConfig.model + ", apiBase=" + llmAdapterConfig.baseOrigin + ")");
     } else {
-        if (llmProvider === "anthropic" && !anthropicApiKey) {
-            logger.warn("LLM_PROVIDER=anthropic but ANTHROPIC_API_KEY not set; falling back to ollama");
-        } else if (llmProvider === "groq" && !groqApiKey) {
-            logger.warn("LLM_PROVIDER=groq but GROQ_API_KEY not set; falling back to ollama");
-        } else if (llmProvider === "openai" && !openaiApiKey) {
-            logger.warn("LLM_PROVIDER=openai but OPENAI_API_KEY not set; falling back to ollama");
-        }
-        logger.info("cback LLM: ollama (host=" + ollamaConfig.host + ":" + ollamaConfig.port + ", model=" + ollamaConfig.model + ")");
+        logger.info("cback LLM: openai-compatible (baseUrl=" + llmAdapterConfig.baseUrl + ", model=" + llmAdapterConfig.model + ")");
     }
 
     /** Tool definitions for GET /config (no request context at init). Chat uses per-request toolDefs from context. */
@@ -368,16 +347,19 @@ function initialize(middlewareOpts: MiddlewareOptions) {
     });
 
     router.get("/config", function (_req: Request, res: Response) {
-        let llm: Record<string, unknown>;
-        if (useAnthropic) {
-            llm = { provider: "anthropic", model: anthropicModel };
-        } else if (useGroq) {
-            llm = { provider: "groq", model: groqModel };
-        } else if (useOpenAI) {
-            llm = { provider: "openai", model: openaiModel };
-        } else {
-            llm = { provider: "ollama", host: ollamaConfig.host, port: ollamaConfig.port, model: ollamaConfig.model };
-        }
+        const llm: Record<string, unknown> =
+            llmAdapterConfig.backend === "anthropic"
+                ? {
+                    backend: "anthropic",
+                    model: llmAdapterConfig.model,
+                    apiBase: llmAdapterConfig.baseOrigin,
+                }
+                : {
+                    backend: "openai",
+                    model: llmAdapterConfig.model,
+                    baseUrl: llmAdapterConfig.baseUrl,
+                    ...(usedFallbackFromAnthropic ? { fallbackFromAnthropic: true } : {}),
+                };
         res.json({ llm, tools: defaultToolDefs });
     });
 
@@ -465,13 +447,7 @@ function initialize(middlewareOpts: MiddlewareOptions) {
 
                 logLlmRequest(logger, rounds);
                 logLlmRequestDebug(logger, rounds, history.length);
-                const completionPromise = useAnthropic
-                    ? anthropicChatCompletion(history, toolDefs, { apiKey: anthropicApiKey!, model: anthropicModel })
-                    : useGroq
-                        ? openaiChatCompletion(history, toolDefs, { apiKey: groqApiKey!, model: groqModel, baseUrl: GROQ_BASE_URL })
-                        : useOpenAI
-                            ? openaiChatCompletion(history, toolDefs, { apiKey: openaiApiKey!, model: openaiModel, baseUrl: OPENAI_BASE_URL })
-                            : ollamaChatCompletion(history, toolDefs, ollamaConfig);
+                const completionPromise = chatCompletion(history, toolDefs, llmAdapterConfig);
                 const timeoutMessage = "LLM request timed out after " + (llmRequestTimeoutMs / 1000) + "s.";
                 const result = await withTimeout(completionPromise, llmRequestTimeoutMs, timeoutMessage);
                 const msg = result.message;

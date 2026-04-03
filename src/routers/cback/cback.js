@@ -4,9 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
-const ollama_1 = require("./ollama");
-const anthropic_1 = require("./anthropic");
-const openai_1 = require("./openai");
+const llmAdapter_1 = require("./llmAdapter");
 const tools_1 = require("./tools");
 const router = express_1.default.Router();
 const SYSTEM_PROMPT = "You are GMEBot, an assistant embedded in a WebGME modeling environment. " +
@@ -278,14 +276,7 @@ function initialize(middlewareOpts) {
     const logger = middlewareOpts.logger.fork("cback");
     const ensureAuthenticated = middlewareOpts.ensureAuthenticated;
     const getUserId = middlewareOpts.getUserId;
-    const ollamaConfig = { ...ollama_1.DEFAULT_CONFIG };
-    const llmProvider = (process.env.LLM_PROVIDER || "ollama").toLowerCase();
-    const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
-    const anthropicModel = process.env.ANTHROPIC_MODEL || anthropic_1.DEFAULT_ANTHROPIC_MODEL;
-    const groqApiKey = process.env.GROQ_API_KEY;
-    const groqModel = process.env.GROQ_MODEL || openai_1.DEFAULT_GROQ_MODEL;
-    const openaiApiKey = process.env.OPENAI_API_KEY;
-    const openaiModel = process.env.OPENAI_MODEL || openai_1.DEFAULT_OPENAI_MODEL;
+    const { config: llmAdapterConfig, usedFallbackFromAnthropic } = (0, llmAdapter_1.resolveLlmFromEnv)();
     const maxToolRounds = (() => {
         const raw = process.env.CBACK_MAX_TOOL_ROUNDS;
         if (raw === undefined || raw === "")
@@ -300,29 +291,14 @@ function initialize(middlewareOpts) {
         const n = parseInt(raw, 10);
         return Number.isInteger(n) && n >= 0 ? n : DEFAULT_LLM_REQUEST_TIMEOUT_MS;
     })();
-    const useAnthropic = llmProvider === "anthropic" && !!anthropicApiKey;
-    const useGroq = llmProvider === "groq" && !!groqApiKey;
-    const useOpenAI = llmProvider === "openai" && !!openaiApiKey;
-    if (useAnthropic) {
-        logger.info("cback LLM: anthropic (model=" + anthropicModel + ")");
+    if (usedFallbackFromAnthropic) {
+        logger.warn("LLM_BACKEND=anthropic but LLM_API_KEY not set; using openai backend at default local base URL");
     }
-    else if (useGroq) {
-        logger.info("cback LLM: groq (model=" + groqModel + ")");
-    }
-    else if (useOpenAI) {
-        logger.info("cback LLM: openai (model=" + openaiModel + ")");
+    if (llmAdapterConfig.backend === "anthropic") {
+        logger.info("cback LLM: anthropic (model=" + llmAdapterConfig.model + ", apiBase=" + llmAdapterConfig.baseOrigin + ")");
     }
     else {
-        if (llmProvider === "anthropic" && !anthropicApiKey) {
-            logger.warn("LLM_PROVIDER=anthropic but ANTHROPIC_API_KEY not set; falling back to ollama");
-        }
-        else if (llmProvider === "groq" && !groqApiKey) {
-            logger.warn("LLM_PROVIDER=groq but GROQ_API_KEY not set; falling back to ollama");
-        }
-        else if (llmProvider === "openai" && !openaiApiKey) {
-            logger.warn("LLM_PROVIDER=openai but OPENAI_API_KEY not set; falling back to ollama");
-        }
-        logger.info("cback LLM: ollama (host=" + ollamaConfig.host + ":" + ollamaConfig.port + ", model=" + ollamaConfig.model + ")");
+        logger.info("cback LLM: openai-compatible (baseUrl=" + llmAdapterConfig.baseUrl + ", model=" + llmAdapterConfig.model + ")");
     }
     /** Tool definitions for GET /config (no request context at init). Chat uses per-request toolDefs from context. */
     const defaultToolDefs = (0, tools_1.getToolDefinitionsForLLM)(middlewareOpts.gmeConfig, undefined);
@@ -338,19 +314,18 @@ function initialize(middlewareOpts) {
         res.json({ ok: true, router: "cback", userId });
     });
     router.get("/config", function (_req, res) {
-        let llm;
-        if (useAnthropic) {
-            llm = { provider: "anthropic", model: anthropicModel };
-        }
-        else if (useGroq) {
-            llm = { provider: "groq", model: groqModel };
-        }
-        else if (useOpenAI) {
-            llm = { provider: "openai", model: openaiModel };
-        }
-        else {
-            llm = { provider: "ollama", host: ollamaConfig.host, port: ollamaConfig.port, model: ollamaConfig.model };
-        }
+        const llm = llmAdapterConfig.backend === "anthropic"
+            ? {
+                backend: "anthropic",
+                model: llmAdapterConfig.model,
+                apiBase: llmAdapterConfig.baseOrigin,
+            }
+            : {
+                backend: "openai",
+                model: llmAdapterConfig.model,
+                baseUrl: llmAdapterConfig.baseUrl,
+                ...(usedFallbackFromAnthropic ? { fallbackFromAnthropic: true } : {}),
+            };
         res.json({ llm, tools: defaultToolDefs });
     });
     router.post("/chat", express_1.default.json(), async function (req, res) {
@@ -424,13 +399,7 @@ function initialize(middlewareOpts) {
                 rounds++;
                 logLlmRequest(logger, rounds);
                 logLlmRequestDebug(logger, rounds, history.length);
-                const completionPromise = useAnthropic
-                    ? (0, anthropic_1.chatCompletion)(history, toolDefs, { apiKey: anthropicApiKey, model: anthropicModel })
-                    : useGroq
-                        ? (0, openai_1.chatCompletion)(history, toolDefs, { apiKey: groqApiKey, model: groqModel, baseUrl: openai_1.GROQ_BASE_URL })
-                        : useOpenAI
-                            ? (0, openai_1.chatCompletion)(history, toolDefs, { apiKey: openaiApiKey, model: openaiModel, baseUrl: openai_1.OPENAI_BASE_URL })
-                            : (0, ollama_1.chatCompletion)(history, toolDefs, ollamaConfig);
+                const completionPromise = (0, llmAdapter_1.chatCompletion)(history, toolDefs, llmAdapterConfig);
                 const timeoutMessage = "LLM request timed out after " + (llmRequestTimeoutMs / 1000) + "s.";
                 const result = await withTimeout(completionPromise, llmRequestTimeoutMs, timeoutMessage);
                 const msg = result.message;

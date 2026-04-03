@@ -18,9 +18,16 @@ WebGME app with monorepo-managed extension packages.
 ## Run the app
 
 - Start WebGME from the repository root:
-  - `npm start`
+  - `npm start` (loads `.env` if present via Node `--env-file-if-exists`)
+  - Or pass any file explicitly: `node --env-file=./path/to.env app.js`
 - Open:
   - `http://localhost:8888`
+
+### Configuration and deployment
+
+- WebGME loads **`config/config.<NODE_ENV>.js`** (see **`config/README.md`**). Example: **`NODE_ENV=jarvis`** uses `config.jarvis.js` (MongoDB URI for that stack).
+- LLM settings use **`LLM_*`** in `.env` (see **`.env.example`**). Do not commit API keys.
+- WebGME can still apply **`WEBGME_*`** overrides from the environment (see `config/index.js`).
 
 ## Monorepo Workflow
 
