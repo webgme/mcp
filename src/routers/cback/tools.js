@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.NEED_CLIENT_DATA_KEYS = void 0;
 exports.logToolFailure = logToolFailure;
 exports.commitCoreSession = commitCoreSession;
+exports.isMetaVisualizer = isMetaVisualizer;
 exports.getToolsForContext = getToolsForContext;
 exports.getToolMap = getToolMap;
 exports.getToolDefinitionsForLLM = getToolDefinitionsForLLM;
@@ -41,6 +42,7 @@ const node_1 = require("./tools/node");
 const state_1 = require("./tools/state");
 /** Visualizer ids that represent the Meta Editor (meta modeling). Used for context-driven tool selection. */
 const META_VISUALIZER_IDS = ["METAAspect"];
+/** True when the user is in the Meta editor (METAAspect); false for model/instance editors (e.g. ModelEditor). */
 function isMetaVisualizer(activeVisualizerId) {
     if (!activeVisualizerId || typeof activeVisualizerId !== "string")
         return false;

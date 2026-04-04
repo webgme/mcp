@@ -389,7 +389,9 @@ exports.isMetaNodeTool = {
 exports.createMetaNode = {
     definition: {
         name: "createMetaNode",
-        description: "Create a new META concept (meta-node) under the project ROOT. Use for new concepts/types/metamodel elements—not for instance nodes (use createNode). " +
+        description: "Create a new META concept (meta-node) under the project ROOT — **metamodel only**. " +
+            "**Do not use** when the user is in the **model/instance editor** and asks for **instances**, **behavior**, or **state machine instance**—use **createNode** with **baseType** from getMetaInfo instead. " +
+            "Use for new concept **types** / metamodel elements—not for instance nodes (use createNode). " +
             "Before using this with a given 'name', call getMetaInfo: if a concept with that name already exists, do not create a duplicate—use setMetaPointer or other META edit tools on the existing path instead. " +
             "Optional: pass 'contains' to define what the new concept can contain; 'pointers' for 0..1 references. For connection/edge/link concepts you MUST use pointer names 'src' and 'dst' only (e.g. pointers: [{ pointerName: 'src', targetPath: 'NodeA' }, { pointerName: 'dst', targetPath: 'NodeB' }]). Prefer 'src' and 'dst' for connection endpoints so WebGME shows them as connections. For other concepts use any pointer names (e.g. 'target', 'parent'). 'sets' for multi-target references. Backend does concept + all relations in one step. " +
             "basePath: concept name (e.g. FCO) or path from getMetaInfo; omit for FCO.",

@@ -124,7 +124,8 @@ import { getStateTools } from "./tools/state";
 /** Visualizer ids that represent the Meta Editor (meta modeling). Used for context-driven tool selection. */
 const META_VISUALIZER_IDS = ["METAAspect"];
 
-function isMetaVisualizer(activeVisualizerId: string | undefined): boolean {
+/** True when the user is in the Meta editor (METAAspect); false for model/instance editors (e.g. ModelEditor). */
+export function isMetaVisualizer(activeVisualizerId: string | undefined): boolean {
     if (!activeVisualizerId || typeof activeVisualizerId !== "string") return false;
     const id = activeVisualizerId.trim();
     return META_VISUALIZER_IDS.some((metaId) => metaId === id);

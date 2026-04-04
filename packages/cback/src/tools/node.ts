@@ -105,8 +105,9 @@ export const createNode: Tool = {
     definition: {
         name: "createNode",
         description:
-            "Create a new node in the WebGME model (server-side). Use this only for creating *instance* nodes in the model, not for defining new concepts. " +
-            "When the user asks to create a 'concept', 'meta concept', 'type', or 'metamodel element', use createMetaNode instead, not createNode. " +
+            "Create a new node in the WebGME model (server-side). Primary tool for **instances** in the **model editor**. " +
+            "When the user says **instance**, **instances**, **behavior**, **state machine instance**, or similar, use createNode with **baseType** set to an existing META concept path or name from **getMetaInfo** (e.g. State, Transition)—not createMetaNode. " +
+            "Use createMetaNode only when defining a **new META concept type** in the metamodel, not when instantiating existing types. " +
             "No arguments are required. When the user says 'create a node' or 'add a node' without specifying type or parent, call createNode with an empty object {} — do NOT ask the user for type or parent; the backend uses defaults (current selection or root as parent, FCO as type). " +
             "Only pass container or baseType when the user explicitly specifies a parent path or a type. baseType must be FCO or an existing node path (from findNodesByName or getMetaInfo); do not invent type names that do not exist in the project. Never pass projectId as container. " +
             "FCO means First Class Object (not Foundation Class Object). " +
