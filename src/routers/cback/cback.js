@@ -151,6 +151,9 @@ function logChatRequest(log, userId, context, messageLen) {
         parts.push("projectId=" + ctx.projectId);
     if (ctx.activeNodeId)
         parts.push("activeNodeId=" + ctx.activeNodeId);
+    if (ctx.scope === "diagram" || ctx.scope === "model" || ctx.scope === "project") {
+        parts.push("scope=" + ctx.scope);
+    }
     log.info("chat_request " + parts.join(" "));
 }
 function logChatRequestDebug(log, body) {
@@ -367,6 +370,18 @@ function initialize(middlewareOpts) {
             }
             if (typeof context.activeTabId === "number")
                 ctxParts.push("activeTabId=" + context.activeTabId);
+            const scope = context.scope;
+            if (scope === "diagram" || scope === "model" || scope === "project") {
+                const scopeHints = {
+                    diagram: "user asks you to prioritize the diagram/canvas (layout, connections, visual)",
+                    model: "user asks you to prioritize the model tree (nodes, properties, pointers—not only the canvas)",
+                    project: "user asks you to prioritize project-wide concerns (repo, branches, exports, cross-cutting)",
+                };
+                ctxParts.push("userScope=" + scope + " (" + scopeHints[scope] + ")");
+            }
+            if (Array.isArray(context.domain) && context.domain.length > 0) {
+                ctxParts.push("userDomain=" + context.domain.map((d) => String(d)).join(", "));
+            }
         }
         const userContent = ctxParts.length > 0
             ? userMessage + "\n[Current context: " + ctxParts.join(", ") + ". Use these when the user does not specify otherwise.]"
