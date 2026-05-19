@@ -1,7 +1,5 @@
 define(["jquery", "./commands"], function ($, Commands) {
     "use strict";
-    /** Placeholder domain labels until the list is loaded dynamically. */
-    const DOMAIN_PLACEHOLDERS = ["General", "Metamodel", "Simulation"];
     /** Continuation message sent when the client provides layout data in a follow-up request. */
     const CONTINUATION_MESSAGE = "[Continuation: layout data provided.]";
     /**
@@ -379,7 +377,8 @@ define(["jquery", "./commands"], function ($, Commands) {
             this._el = containerEl;
             this._isOpen = false;
             this._onDocClick = null;
-            this._selectedScope = "model";
+            this._modelingMode = "metamodel";
+            this._objectList = { existing: [], new: [], deleted: [] };
             this._injectStyles();
             this._render();
         }
@@ -410,44 +409,24 @@ define(["jquery", "./commands"], function ($, Commands) {
             this._dialog.append(this._messagesEl);
             const contextBar = $('<div class="gme-bot-context-bar"></div>');
             const scopeRow = $('<div class="gme-bot-context-row"></div>');
-            scopeRow.append('<span class="gme-bot-context-label">Scope</span>');
+            scopeRow.append('<span class="gme-bot-context-label">Mode</span>');
             const scopeGroup = $('<div class="gme-bot-scope-group" role="group"></div>');
-            this._scopeBtnDiagram = $('<button type="button" class="btn btn-default btn-xs gme-bot-scope-btn" data-scope="diagram">Diagram</button>');
-            this._scopeBtnModel = $('<button type="button" class="btn btn-default btn-xs gme-bot-scope-btn" data-scope="model">Model</button>');
-            this._scopeBtnProject = $('<button type="button" class="btn btn-default btn-xs gme-bot-scope-btn" data-scope="project">Project</button>');
-            scopeGroup.append(this._scopeBtnDiagram).append(this._scopeBtnModel).append(this._scopeBtnProject);
+            this._modeBtnMeta = $('<button type="button" class="btn btn-default btn-xs gme-bot-scope-btn" data-mode="metamodel">Metamodel</button>');
+            this._modeBtnDomain = $('<button type="button" class="btn btn-default btn-xs gme-bot-scope-btn" data-mode="domain">Domain model</button>');
+            scopeGroup.append(this._modeBtnMeta).append(this._modeBtnDomain);
             scopeRow.append(scopeGroup);
             contextBar.append(scopeRow);
-            const domainRow = $('<div class="gme-bot-context-row"></div>');
-            domainRow.append('<span class="gme-bot-context-label">Domain</span>');
-            const domainChips = $('<div class="gme-bot-domain-chips"></div>');
-            for (let i = 0; i < DOMAIN_PLACEHOLDERS.length; i++) {
-                const name = DOMAIN_PLACEHOLDERS[i];
-                const id = "gme-bot-domain-" + name.replace(/\s+/g, "-");
-                const label = $('<label class="gme-bot-domain-chip" for="' + id + '"></label>');
-                label.append($('<input type="checkbox" id="' + id + '" data-domain="' + name + '" />'));
-                label.append(" " + name);
-                domainChips.append(label);
-            }
-            domainRow.append(domainChips);
-            contextBar.append(domainRow);
-            const syncScopeUi = () => {
-                const map = {
-                    diagram: this._scopeBtnDiagram,
-                    model: this._scopeBtnModel,
-                    project: this._scopeBtnProject,
-                };
-                Object.keys(map).forEach((k) => {
-                    map[k].toggleClass("active", k === this._selectedScope);
-                });
+            const syncModeUi = () => {
+                this._modeBtnMeta.toggleClass("active", this._modelingMode === "metamodel");
+                this._modeBtnDomain.toggleClass("active", this._modelingMode === "domain");
             };
-            syncScopeUi();
+            syncModeUi();
             scopeGroup.on("click", ".gme-bot-scope-btn", (ev) => {
                 const t = $(ev.target).closest(".gme-bot-scope-btn");
-                const s = t.attr("data-scope");
-                if (s === "diagram" || s === "model" || s === "project") {
-                    this._selectedScope = s;
-                    syncScopeUi();
+                const m = t.attr("data-mode");
+                if (m === "metamodel" || m === "domain") {
+                    this._modelingMode = m;
+                    syncModeUi();
                 }
             });
             this._dialog.append(contextBar);
@@ -514,20 +493,7 @@ define(["jquery", "./commands"], function ($, Commands) {
             }
             this._dialog.css({ top: Math.max(top, 8), left: left });
         }
-        /** Collect selected domain tags from placeholder checkboxes. */
-        _getSelectedDomains() {
-            const out = [];
-            this._dialog.find('.gme-bot-domain-chips input[type="checkbox"]:checked').each(function () {
-                const d = $(this).attr("data-domain");
-                if (d) {
-                    out.push(d);
-                }
-            });
-            return out;
-        }
-        /** Build context from the WebGME client for this request. The client is always in a project;
-         * we send projectId, branchName, activeNodeId from client/State, plus activeVisualizerId and activeTabId from State,
-         * plus user-selected scope and domain. */
+        /** Build context from the WebGME client for this request. */
         _getContext() {
             const client = this._client;
             if (!client)
@@ -544,19 +510,20 @@ define(["jquery", "./commands"], function ($, Commands) {
             const activeTabId = (g === null || g === void 0 ? void 0 : g.State) && typeof g.State.getActiveTab === "function"
                 ? g.State.getActiveTab()
                 : undefined;
-            const domain = this._getSelectedDomains();
-            const ctx = {
+            const viz = activeVisualizerId != null ? String(activeVisualizerId) : undefined;
+            let modelingMode = this._modelingMode;
+            if (viz === "METAAspect") {
+                modelingMode = "metamodel";
+            }
+            return {
                 projectId: projectId != null ? String(projectId) : undefined,
                 branchName: branchName != null ? String(branchName) : undefined,
                 activeNodeId: activeNodeId != null ? String(activeNodeId) : undefined,
-                activeVisualizerId: activeVisualizerId != null ? String(activeVisualizerId) : undefined,
+                activeVisualizerId: viz,
                 activeTabId: typeof activeTabId === "number" ? activeTabId : undefined,
-                scope: this._selectedScope,
+                modelingMode,
+                objectList: this._objectList,
             };
-            if (domain.length > 0) {
-                ctx.domain = domain;
-            }
-            return ctx;
         }
         _handleSend() {
             const text = (this._input.val() || "").trim();

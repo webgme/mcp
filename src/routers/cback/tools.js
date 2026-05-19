@@ -4,9 +4,12 @@ exports.NEED_CLIENT_DATA_KEYS = void 0;
 exports.logToolFailure = logToolFailure;
 exports.commitCoreSession = commitCoreSession;
 exports.isMetaVisualizer = isMetaVisualizer;
-exports.getToolsForContext = getToolsForContext;
+exports.resolveModelingMode = resolveModelingMode;
+exports.getActiveTools = getActiveTools;
 exports.getToolMap = getToolMap;
+exports.isToolEnabled = isToolEnabled;
 exports.getToolDefinitionsForLLM = getToolDefinitionsForLLM;
+exports.getToolsForContext = getToolsForContext;
 /** When a tool needs data only the client has (e.g. diagram layout), it sets needClientData in data. */
 exports.NEED_CLIENT_DATA_KEYS = {
     diagramLayout: "diagramLayout",
@@ -40,47 +43,61 @@ const branch_1 = require("./tools/branch");
 const meta_1 = require("./tools/meta");
 const node_1 = require("./tools/node");
 const state_1 = require("./tools/state");
-/** Visualizer ids that represent the Meta Editor (meta modeling). Used for context-driven tool selection. */
+const metaPatch_1 = require("./tools/metaPatch");
+/** Visualizer ids that represent the Meta Editor (meta modeling). */
 const META_VISUALIZER_IDS = ["METAAspect"];
-/** True when the user is in the Meta editor (METAAspect); false for model/instance editors (e.g. ModelEditor). */
 function isMetaVisualizer(activeVisualizerId) {
     if (!activeVisualizerId || typeof activeVisualizerId !== "string")
         return false;
     const id = activeVisualizerId.trim();
     return META_VISUALIZER_IDS.some((metaId) => metaId === id);
 }
-/** Project + branch + state: always included regardless of visualizer. */
-function getCoreTools(gmeConfig) {
-    return [...project_1.PROJECT_TOOLS, ...branch_1.BRANCH_TOOLS, ...(0, state_1.getStateTools)(gmeConfig)];
+/** Resolve modeling layer from explicit toggle or active visualizer. */
+function resolveModelingMode(context) {
+    const m = context === null || context === void 0 ? void 0 : context.modelingMode;
+    if (m === "metamodel" || m === "domain")
+        return m;
+    return isMetaVisualizer(context === null || context === void 0 ? void 0 : context.activeVisualizerId) ? "metamodel" : "domain";
 }
-/** All tools (for the tool map). */
-function getAllTools(gmeConfig) {
-    return [...project_1.PROJECT_TOOLS, ...branch_1.BRANCH_TOOLS, ...meta_1.META_TOOLS, ...node_1.NODE_TOOLS, ...(0, state_1.getStateTools)(gmeConfig)];
+/** Legacy tool sets — kept for handlers and tests; not exposed to the LLM by default. */
+function getLegacyTools(gmeConfig) {
+    return [
+        ...project_1.PROJECT_TOOLS,
+        ...branch_1.BRANCH_TOOLS,
+        ...meta_1.META_TOOLS,
+        ...node_1.NODE_TOOLS,
+        ...(0, state_1.getStateTools)(gmeConfig),
+    ];
 }
-/**
- * Tools to expose for this request based on context. When activeVisualizerId is the meta editor,
- * only meta tools are added (plus core). Otherwise only node tools are added (plus core).
- * This reduces token use by not sending the other set.
- */
-function getToolsForContext(gmeConfig, context) {
-    const core = getCoreTools(gmeConfig);
-    const isMeta = isMetaVisualizer(context === null || context === void 0 ? void 0 : context.activeVisualizerId);
-    if (isMeta)
-        return [...core, ...meta_1.META_TOOLS];
-    return [...core, ...node_1.NODE_TOOLS];
+/** Tools the LLM may call for this request (scoping drill-down). */
+function getActiveTools(_gmeConfig, context) {
+    if (resolveModelingMode(context) === "metamodel") {
+        return [...metaPatch_1.META_PATCH_TOOLS];
+    }
+    return [];
 }
+/** Full handler map (legacy tools remain registered but gated at execution). */
 function getToolMap(gmeConfig) {
     const map = new Map();
-    for (const t of getAllTools(gmeConfig)) {
+    for (const t of getLegacyTools(gmeConfig)) {
+        map.set(t.definition.name, t.handler);
+    }
+    for (const t of metaPatch_1.META_PATCH_TOOLS) {
         map.set(t.definition.name, t.handler);
     }
     return map;
 }
-/** Always expose the full tool set to the LLM (no activeVisualizerId / context-based subset). */
-function getToolDefinitionsForLLM(gmeConfig, _context) {
-    const tools = getAllTools(gmeConfig);
+function isToolEnabled(toolName, context) {
+    return getActiveTools(undefined, context).some((t) => t.definition.name === toolName);
+}
+function getToolDefinitionsForLLM(gmeConfig, context) {
+    const tools = getActiveTools(gmeConfig, context);
     return tools.map((t) => ({
         type: "function",
         function: t.definition,
     }));
+}
+/** @deprecated Use getActiveTools — kept for callers that referenced context-based subsets. */
+function getToolsForContext(gmeConfig, context) {
+    return getActiveTools(gmeConfig, context);
 }

@@ -16,6 +16,8 @@ export interface ToolDefinition {
     };
 }
 
+export type ModelingMode = "metamodel" | "domain";
+
 export interface ToolContext {
     userId: string;
     logger: any;
@@ -39,12 +41,24 @@ export interface ToolContext {
         branchName?: string;
         /** Active/selected node ID sent by the client; used as default container or target when omitted from tool args. */
         activeNodeId?: string;
-        /** Active visualizer id from State.getActiveVisualizer() (e.g. ModelEditor, METAAspect). Used for context-driven tool sets. */
+        /** Active visualizer id from State.getActiveVisualizer() (e.g. ModelEditor, METAAspect). */
         activeVisualizerId?: string;
         /** Active tab index from State.getActiveTab(). When visualizer is Meta Editor, this is the meta sheet index. */
         activeTabId?: number;
+        /** User toggle: metamodel (META types) vs domain (instances). Falls back to activeVisualizerId. */
+        modelingMode?: ModelingMode;
+        /** Client staging list: existing / new / deleted objects (name, path, guid). Server merges existing from core when open. */
+        objectList?: {
+            existing?: Array<{ name: string; path: string; guid: string }>;
+            new?: Array<{ name: string; path: string; guid: string }>;
+            deleted?: Array<{ name: string; path: string; guid: string }>;
+        };
         /** Filled by client on continuation when backend requested diagramLayout. */
         diagramLayout?: DiagramLayoutData;
+        /** @deprecated Use modelingMode instead. */
+        scope?: "diagram" | "model" | "project";
+        /** @deprecated Domain chips removed from UI. */
+        domain?: string[];
     };
 }
 
@@ -120,52 +134,71 @@ import { BRANCH_TOOLS } from "./tools/branch";
 import { META_TOOLS } from "./tools/meta";
 import { NODE_TOOLS } from "./tools/node";
 import { getStateTools } from "./tools/state";
+import { META_PATCH_TOOLS } from "./tools/metaPatch";
 
-/** Visualizer ids that represent the Meta Editor (meta modeling). Used for context-driven tool selection. */
+/** Visualizer ids that represent the Meta Editor (meta modeling). */
 const META_VISUALIZER_IDS = ["METAAspect"];
 
-/** True when the user is in the Meta editor (METAAspect); false for model/instance editors (e.g. ModelEditor). */
 export function isMetaVisualizer(activeVisualizerId: string | undefined): boolean {
     if (!activeVisualizerId || typeof activeVisualizerId !== "string") return false;
     const id = activeVisualizerId.trim();
     return META_VISUALIZER_IDS.some((metaId) => metaId === id);
 }
 
-/** Project + branch + state: always included regardless of visualizer. */
-function getCoreTools(gmeConfig?: any): Tool[] {
-    return [...PROJECT_TOOLS, ...BRANCH_TOOLS, ...getStateTools(gmeConfig)];
+/** Resolve modeling layer from explicit toggle or active visualizer. */
+export function resolveModelingMode(context: ToolContext["context"]): ModelingMode {
+    const m = context?.modelingMode;
+    if (m === "metamodel" || m === "domain") return m;
+    return isMetaVisualizer(context?.activeVisualizerId) ? "metamodel" : "domain";
 }
 
-/** All tools (for the tool map). */
-function getAllTools(gmeConfig?: any): Tool[] {
-    return [...PROJECT_TOOLS, ...BRANCH_TOOLS, ...META_TOOLS, ...NODE_TOOLS, ...getStateTools(gmeConfig)];
+/** Legacy tool sets — kept for handlers and tests; not exposed to the LLM by default. */
+function getLegacyTools(gmeConfig?: any): Tool[] {
+    return [
+        ...PROJECT_TOOLS,
+        ...BRANCH_TOOLS,
+        ...META_TOOLS,
+        ...NODE_TOOLS,
+        ...getStateTools(gmeConfig),
+    ];
 }
 
-/**
- * Tools to expose for this request based on context. When activeVisualizerId is the meta editor,
- * only meta tools are added (plus core). Otherwise only node tools are added (plus core).
- * This reduces token use by not sending the other set.
- */
-export function getToolsForContext(gmeConfig: any | undefined, context: ToolContext["context"]): Tool[] {
-    const core = getCoreTools(gmeConfig);
-    const isMeta = isMetaVisualizer(context?.activeVisualizerId);
-    if (isMeta) return [...core, ...META_TOOLS];
-    return [...core, ...NODE_TOOLS];
+/** Tools the LLM may call for this request (scoping drill-down). */
+export function getActiveTools(_gmeConfig: any | undefined, context: ToolContext["context"]): Tool[] {
+    if (resolveModelingMode(context) === "metamodel") {
+        return [...META_PATCH_TOOLS];
+    }
+    return [];
 }
 
+/** Full handler map (legacy tools remain registered but gated at execution). */
 export function getToolMap(gmeConfig?: any): Map<string, ToolHandler> {
     const map = new Map<string, ToolHandler>();
-    for (const t of getAllTools(gmeConfig)) {
+    for (const t of getLegacyTools(gmeConfig)) {
+        map.set(t.definition.name, t.handler);
+    }
+    for (const t of META_PATCH_TOOLS) {
         map.set(t.definition.name, t.handler);
     }
     return map;
 }
 
-/** Always expose the full tool set to the LLM (no activeVisualizerId / context-based subset). */
-export function getToolDefinitionsForLLM(gmeConfig: any | undefined, _context?: ToolContext["context"]): object[] {
-    const tools = getAllTools(gmeConfig);
+export function isToolEnabled(toolName: string, context: ToolContext["context"]): boolean {
+    return getActiveTools(undefined, context).some((t) => t.definition.name === toolName);
+}
+
+export function getToolDefinitionsForLLM(
+    gmeConfig: any | undefined,
+    context?: ToolContext["context"]
+): object[] {
+    const tools = getActiveTools(gmeConfig, context);
     return tools.map((t) => ({
         type: "function",
         function: t.definition,
     }));
+}
+
+/** @deprecated Use getActiveTools — kept for callers that referenced context-based subsets. */
+export function getToolsForContext(gmeConfig: any | undefined, context: ToolContext["context"]): Tool[] {
+    return getActiveTools(gmeConfig, context);
 }

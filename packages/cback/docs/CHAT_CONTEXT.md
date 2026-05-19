@@ -1,6 +1,6 @@
 # Chat context: what the client can send
 
-The GMEBot widget sends a `context` object with each POST to `/cback/chat`. The backend uses it for defaults (project, branch, active node) and can use it for context-driven behavior (e.g. which tools to expose).
+The GMEBot widget sends a `context` object with each POST to `/cback/chat`. The backend uses it for defaults (project, branch, active node), **modeling mode** (which tools are exposed), and injects **MetaDescriptor** + **object-list** into the system prompt when a project is open.
 
 ## Currently sent by the client
 
@@ -11,6 +11,8 @@ The GMEBot widget sends a `context` object with each POST to `/cback/chat`. The 
 | **activeNodeId** | `WebGMEGlobal.State.getActiveObject()` | Currently selected node (path/id). |
 | **activeVisualizerId** | `WebGMEGlobal.State.getActiveVisualizer()` | Active visualizer id (e.g. `ModelEditor`, `METAAspect`, `GMEBot`). From `Visualizers.json` / deployment. |
 | **activeTabId** | `WebGMEGlobal.State.getActiveTab()` | Active tab index (number). In the Meta Editor this is the **meta sheet index** (0-based) in the project’s MetaSheets registry. |
+| **modelingMode** | GMEBot **Mode** toggle | `metamodel` or `domain`. Metamodel exposes only `patchMetaDescriptor`; domain hides all tools for now. |
+| **objectList** | GMEBot staging (`existing` / `new` / `deleted`) | Each item: `{ name, path, guid }`. Server fills `existing` from open project meta nodes when possible. |
 
 ## WebGME State: what else is available
 

@@ -6,39 +6,18 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const llmAdapter_1 = require("./llmAdapter");
 const tools_1 = require("./tools");
+const contextBlocks_1 = require("./contextBlocks");
 const router = express_1.default.Router();
-const SYSTEM_PROMPT = "You are GMEBot, an assistant embedded in a WebGME modeling environment. " +
-    "You help users manage their projects and metamodels. " +
-    "You have tools available — always call them instead of guessing. " +
-    "Use the API tool-calling mechanism: each action must be a tool invocation by **tool name** (e.g. createMetaNode), not free-form JSON. " +
-    "For createMetaNode, the **parameters** include `name` (the new concept's name)—do not confuse that with the tool name. " +
-    "A single user message often asks for multiple things (e.g. 'create concept X and add a pointer to Y', or 'new concept with three pointers'). You MUST fulfill every part of the request: use as many tool calls as needed, or use createMetaNode with its optional 'contains', 'pointers', and 'sets' arrays to do concept + relations in one call. Do not stop after one tool call and reply until all requested actions are done. For connection, link, or edge concepts prefer pointer names 'src' and 'dst' so WebGME shows them as connections; you can use any order. The backend maps source/from/origin to src and destination/to/sink to dst if you use those words. Example: pointers: [{ pointerName: 'src', targetPath: 'X' }, { pointerName: 'dst', targetPath: 'Y' }]. " +
-    "For example, call listProjects to see projects, listSeeds to see seeds, " +
-    "createProject to create one, and switchProject to navigate to one. " +
-    "Each tool returns JSON data. Present the results clearly to the user. " +
-    "When referring to nodes in your replies to the user, use a consistent format: Name (path), e.g. 'StateMachine (/1/2)' or 'FCO (/1)'. The name is human-readable; the path in parentheses is the operational identifier. Use this format when summarizing tool results (moveNode, createNode, findNodesByName, etc.) so the user sees the friendly name while the path remains available for disambiguation. For tool parameters, always pass the path. " +
-    "Assume the user's request applies to the **current context** (open project, active visualizer, selection) unless they explicitly scope it differently. " +
-    "Three scopes for 'what exists' and bulk work: (1) **Diagram** — single level, what is on the **current canvas**; use getDiagramLayout (paths on that diagram). (2) **Model / subtree** — multiple levels of hierarchy under some container the user cares about (e.g. active selection, a named model fragment); use listNodes with that container path or name—not necessarily the whole project. (3) **Project** — entire tree; use listNodes from '/' or omit container. Do not claim there are no nodes without getDiagramLayout and/or listNodes/findNodesByName when a project is open. " +
-    "When findNodesByName returns exactly one nodePaths entry, use that path directly (no extra confirmation). " +
-    "If a tool returns an error or 'not implemented', tell the user. " +
-    "When the client sends current context (projectId, branchName, activeNodeId), that is the user's open project and selection. " +
-    "Use that as the default when the user does not specify a project or node — do not ask them to choose a project unless they explicitly want to switch or create one. " +
-    "For tool calls, omit optional parameters when the user did not specify them; the backend will use default values. " +
-    "If the user asks to 'create a node' or 'add a node' without giving type or parent, call createNode with no arguments (empty object) and do not ask them for type or parent. " +
-    "In WebGME, FCO means First Class Object (not Foundation Class Object). " +
-    "For property access: use getProperty to list or read a property, setProperty to set. The backend resolves attributes vs registry (attributes have priority). When the user says 'set', 'change', 'rename', 'modify' (e.g. 'rename X to Y', 'set position to 400 400'), call getProperty with no name first to see available properties and value formats, then setProperty. " +
-    "When the user refers to a node by name (e.g. 'the node named X', 'set position of MyNode'), call findNodesByName first. Pass one of the returned nodePaths as nodeId in getProperty and setProperty. This applies to META concept nodes too: use findNodesByName, then getProperty and setProperty to change values. " +
-    "Usual flow: get paths first (getDiagramLayout for diagram scope, listNodes for a chosen subtree or project scope, findNodesByName), then manipulate. For moveNode: get paths for node and container, then moveNode. For deleteNode, getProperty, setProperty: obtain paths from findNodesByName when the user refers by name. " +
-    "Bulk delete except FCO: **diagram** scope — getDiagramLayout, then deleteNode other paths from the layout (never '/'). **Subtree** scope — listNodes(container) for the relevant parent, then deleteNode as needed. **Project** scope — listNodes from '/', then delete (never '/'). Resolve FCO with findNodesByName('FCO') when matching by name. deleteNode removes descendants, so deleting a parent can replace deleting its children. " +
-    "When the user says 'change', 'set', 'modify', or 'rename' an attribute of a concept (e.g. 'rename Folder to MyFolder'), use node tools: findNodesByName, getProperty, setProperty. Do NOT use setMetaAttribute for that. Use setMetaAttribute only when defining the attribute rule (e.g. 'define the type of attribute name'). " +
-    "When setting a property, use the format from getProperty (attributeValues/registryValues or valueFormats). " +
-    "When the user wants to select a node, go to a node, or switch the visualizer (e.g. 'select node X', 'go to the root', 'switch to the diagram'), use setClientState with activeNodeId and/or visualizerId. " +
-    "Always get the path from a tool first: for 'switch to FCO' or 'go to FCO context', call findNodesByName with name 'FCO', then setClientState with one of the returned nodePaths as activeNodeId. For other nodes by name, call findNodesByName first. For root use '/'. Do not guess paths — use only paths from tool responses. " +
-    "Path vs name: parameters that accept path or name (conceptPath, sourcePath, targetPath, basePath, nodePath, etc.): treat a value as a path ONLY if it begins with '/' or if it cannot be found when used as a name. Otherwise pass it as a name—the backend resolves names. Example: 'Folder' and 'FCO' are concept names, not paths; use them as-is (no leading slash). Paths are project-specific (e.g. /1, /1/2) and come from getMetaInfo or findNodesByName. " +
-    "For META containment (setMetaContainment): each call defines exactly one containment edge (one source concept, one target concept). The source must be the concept that is the container in the user's description (e.g. for 'SM contains S and T', source is SM, not FCO). Do not use FCO as source unless the user explicitly says FCO is the container; FCO is the root base type. If one container concept should contain multiple types, call setMetaContainment separately for each pair: e.g. (sourcePath=/SM, targetPath=/S) then (sourcePath=/SM, targetPath=/T). When the user says 'any' cardinality or does not specify cardinality, do not send min or max—omit both parameters. For pointers use setMetaPointer (cardinality 0..1 is fixed; no min/max arguments). For sets (multiple targets) use setMetaSet; for mixins use setMetaMixin. For all META relationship tools, path parameters accept either absolute paths (e.g. /FCO, /MyConcept) or concept names: when the user refers to concepts by name (no leading slash), pass the name as-is—the backend resolves names to paths. " +
-    "META concepts already in the project: before createMetaNode with a given name, call getMetaInfo and check concepts[].name. If that name already exists, do not create a second concept—use setMetaPointer, setMetaContainment, setMetaSet, delMetaPointer, etc. on the existing concepts[].path. For follow-ups like 'add src/dst', 'make X a connection', or 'change pointers on Transition', use setMetaPointer (and delMetaPointer if replacing old pointers) on the existing concept—never createMetaNode again with the same concept name. " +
-    "**Instance model vs metamodel:** If context.activeVisualizerId is the **model/instance editor** (not METAAspect), the user is editing **instances**. Words like **instance**, **instances**, **behavior**, **capture**, **state machine instance**, **model** (as in runtime model), **turnstile** → use **createNode** (with **baseType** paths from **getMetaInfo** concepts for State, Transition, etc.), **moveNode**, **setProperty**—not createMetaNode. **createMetaNode** is only for defining **new concept types** in the **metamodel** when in the META editor or when the user explicitly asks to add/change **META types** / **metamodel**. Do not create META concepts when the user asked for **instances** of existing types. " +
-    "When the user asks to create a **new META concept type** (metamodel element, new type in the type system—not an instance), use createMetaNode, not createNode. createNode creates instance nodes in the model; createMetaNode defines new concepts in the metamodel. For a meta concept that should contain other types (e.g. 'Folder that can contain FCO'), or have pointers or sets, use createMetaNode with the optional 'contains', 'pointers', and 'sets' arrays so creation and all relations are done in one call. For createMetaNode basePath: pass the base concept's **name** (e.g. FCO) or omit to use FCO. Do NOT pass /FCO as a path—in WebGME the path of the FCO concept is project-specific (e.g. /1). The backend accepts either a concept name or a path from getMetaInfo (concepts[].path); it resolves names to the correct path. For connection, link, or edge concepts (that connect two nodes), prefer pointer names 'src' and 'dst' so WebGME visualizes them as connections; keep whatever order is meaningful (e.g. src=source end, dst=target end). The backend maps source/from/destination/to to src/dst when you use those words. When the user asks for such a concept, create it with pointers 'src' and 'dst' (or use the synonym words; order is preserved). After any meta modification (createMetaNode, setMetaContainment, setMetaPointer, setMetaSet, setMetaMixin, or their del* tools), run checkMetaConsistency as a safety check and report the result (ok or violations) to the user. To check that the instance model obeys the meta rules (e.g. containment, pointers), run checkModelConsistency on the project or a sub-tree and report any violations. After any model changes (createNode, moveNode, deleteNode, setProperty, setPointer, etc.), run checkModelConsistency for the current scope: pass the active node path (context.activeNodeId from the client) as nodePath with includeChildren true, so the subtree under the user's selection is validated; if no activeNodeId is available, run it on the whole project (omit nodePath or use '/').";
+const SYSTEM_PROMPT_BASE = "You are GMEBot, an assistant embedded in a WebGME modeling environment. " +
+    "Use the API tool-calling mechanism when a tool is available — each action must be a named tool invocation, not free-form JSON pretending to be a tool. " +
+    "When referring to concepts or nodes, use Name (path), e.g. State (/3). " +
+    "The client sends modelingMode (metamodel | domain), project/selection context, a MetaDescriptor snapshot, and an object-list (existing / new / deleted). " +
+    "Do not ask to fetch the metamodel first — it is already in context. " +
+    "In metamodel mode the only tool is patchMetaDescriptor: apply RFC 6902 JSON Patch to the MetaDescriptor (see docs/schemas/meta-descriptor.schema.json). " +
+    "Prefer small, focused patches. For a new concept use {\"op\":\"add\",\"path\":\"/concepts/-\",\"value\":{\"name\":\"...\",\"extends\":\"FCO\",...}}. " +
+    "Connection types belong in relationships (e.g. \"Transition: State -> State\") or concept pointers src/dst. " +
+    "In domain mode tools are hidden for now — explain changes clearly from context. " +
+    "If a tool returns an error, report it. In WebGME, FCO means First Class Object.";
 const MAX_TOOL_ROUNDS = 5; // default; override with CBACK_MAX_TOOL_ROUNDS env
 /** Default timeout for a single LLM request (ms). 0 = no timeout. Override with CBACK_LLM_REQUEST_TIMEOUT_MS. */
 const DEFAULT_LLM_REQUEST_TIMEOUT_MS = 120000; // 2 minutes
@@ -184,8 +163,8 @@ function logChatRequest(log, userId, context, messageLen) {
         parts.push("projectId=" + ctx.projectId);
     if (ctx.activeNodeId)
         parts.push("activeNodeId=" + ctx.activeNodeId);
-    if (ctx.scope === "diagram" || ctx.scope === "model" || ctx.scope === "project") {
-        parts.push("scope=" + ctx.scope);
+    if (ctx.modelingMode === "metamodel" || ctx.modelingMode === "domain") {
+        parts.push("modelingMode=" + ctx.modelingMode);
     }
     log.info("chat_request " + parts.join(" "));
 }
@@ -251,9 +230,20 @@ function logToolResponseDebug(log, name, result) {
 }
 function getSession(userId) {
     if (!sessions.has(userId)) {
-        sessions.set(userId, [{ role: "system", content: SYSTEM_PROMPT }]);
+        sessions.set(userId, [{ role: "system", content: SYSTEM_PROMPT_BASE }]);
     }
     return sessions.get(userId);
+}
+function refreshSystemMessage(history, toolCtx) {
+    const payload = (0, contextBlocks_1.buildSessionContextPayload)(toolCtx);
+    const blocks = (0, contextBlocks_1.formatContextBlocksForSystem)(payload);
+    const content = blocks ? SYSTEM_PROMPT_BASE + "\n\n" + blocks : SYSTEM_PROMPT_BASE;
+    if (history.length > 0 && history[0].role === "system") {
+        history[0].content = content;
+    }
+    else {
+        history.unshift({ role: "system", content });
+    }
 }
 /** Trim history to system + last N messages to limit token usage. */
 function trimHistory(history, maxMessages) {
@@ -386,39 +376,26 @@ function initialize(middlewareOpts) {
         }
         const isContinuation = ((_c = req.body) === null || _c === void 0 ? void 0 : _c.continuation) === true;
         const history = getSession(userId);
-        const ctxParts = [];
-        if (context && typeof context === "object") {
-            if (context.projectId)
-                ctxParts.push("projectId=" + context.projectId);
-            if (context.branchName)
-                ctxParts.push("branchName=" + context.branchName);
-            if (context.activeNodeId)
-                ctxParts.push("activeNodeId=" + context.activeNodeId);
-            if (context.activeVisualizerId) {
-                const vid = String(context.activeVisualizerId).trim();
-                const layerHint = (0, tools_1.isMetaVisualizer)(vid)
-                    ? "metamodel/META editor — define types with createMetaNode"
-                    : "instance/model editor — build instances with createNode/moveNode/setProperty; do not use createMetaNode unless the user explicitly asks to change metatypes";
-                ctxParts.push("activeVisualizerId=" + vid + " (" + layerHint + ")");
-            }
-            if (typeof context.activeTabId === "number")
-                ctxParts.push("activeTabId=" + context.activeTabId);
-            const scope = context.scope;
-            if (scope === "diagram" || scope === "model" || scope === "project") {
-                const scopeHints = {
-                    diagram: "user asks you to prioritize the diagram/canvas (layout, connections, visual)",
-                    model: "user asks you to prioritize the model tree (nodes, properties, pointers—not only the canvas)",
-                    project: "user asks you to prioritize project-wide concerns (repo, branches, exports, cross-cutting)",
-                };
-                ctxParts.push("userScope=" + scope + " (" + scopeHints[scope] + ")");
-            }
-            if (Array.isArray(context.domain) && context.domain.length > 0) {
-                ctxParts.push("userDomain=" + context.domain.map((d) => String(d)).join(", "));
+        const toolCtxEarly = {
+            userId,
+            logger: logger.fork("tools"),
+            gmeConfig: middlewareOpts.gmeConfig,
+            safeStorage: middlewareOpts.safeStorage,
+            gmeAuth: middlewareOpts.gmeAuth,
+            context: context && typeof context === "object" ? context : undefined,
+        };
+        if (context && typeof context === "object" && context.projectId) {
+            const sessionEarly = await createCoreSession(middlewareOpts.safeStorage, middlewareOpts.gmeConfig, userId, context.projectId, context.branchName || "master", logger);
+            if (sessionEarly) {
+                toolCtxEarly.coreSession = sessionEarly;
             }
         }
-        const userContent = ctxParts.length > 0
-            ? userMessage + "\n[Current context: " + ctxParts.join(", ") + ". Use these when the user does not specify otherwise.]"
-            : userMessage;
+        refreshSystemMessage(history, toolCtxEarly);
+        const turnCtx = (0, contextBlocks_1.formatTurnContextLine)(toolCtxEarly);
+        const mode = (0, tools_1.resolveModelingMode)(toolCtxEarly.context);
+        const userContent = turnCtx
+            ? userMessage + "\n[Turn context: " + turnCtx + ", modelingMode=" + mode + "]"
+            : userMessage + "\n[Turn context: modelingMode=" + mode + "]";
         if (!isContinuation) {
             history.push({ role: "user", content: userContent });
         }
@@ -431,27 +408,10 @@ function initialize(middlewareOpts) {
                 last.content = last.content + CONTINUATION_LAYOUT_HINT;
             }
         }
-        const toolCtx = {
-            userId,
-            logger: logger.fork("tools"),
-            gmeConfig: middlewareOpts.gmeConfig,
-            safeStorage: middlewareOpts.safeStorage,
-            gmeAuth: middlewareOpts.gmeAuth,
-            context: context && typeof context === "object" ? context : undefined,
-        };
-        if (context && typeof context === "object" && context.projectId) {
-            const session = await createCoreSession(middlewareOpts.safeStorage, middlewareOpts.gmeConfig, userId, context.projectId, context.branchName || "master", logger);
-            if (session) {
-                toolCtx.coreSession = session;
-            }
-        }
-        /** Tool definitions for this request: filtered by activeVisualizerId etc. */
+        const toolCtx = toolCtxEarly;
+        /** Tool definitions for this request: metamodel → patchMetaDescriptor only; domain → none. */
         const toolDefs = (0, tools_1.getToolDefinitionsForLLM)(middlewareOpts.gmeConfig, toolCtx.context);
         try {
-            const listProjectsHandler = toolMap.get("listProjects");
-            if (listProjectsHandler) {
-                await ensureProjectListInContext(history, listProjectsHandler, toolCtx);
-            }
             trimHistory(history, MAX_HISTORY_MESSAGES);
             let rounds = 0;
             let lastRoundFingerprint = null;
@@ -532,7 +492,18 @@ function initialize(middlewareOpts) {
                     });
                     const handler = toolMap.get(call.function.name);
                     let toolResult;
-                    if (handler) {
+                    if (!(0, tools_1.isToolEnabled)(call.function.name, toolCtx.context)) {
+                        const mode = (0, tools_1.resolveModelingMode)(toolCtx.context);
+                        toolResult = {
+                            error: "Tool '" +
+                                call.function.name +
+                                "' is not available in " +
+                                mode +
+                                " mode. Use patchMetaDescriptor in metamodel mode.",
+                        };
+                        logToolResponse(logger, call.function.name, toolResult);
+                    }
+                    else if (handler) {
                         try {
                             const handlerResult = await handler(args, toolCtx);
                             toolResult = handlerResult.data;
