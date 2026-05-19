@@ -142,7 +142,40 @@ function toolArgsContext(args) {
         const s = typeof v === "string" ? v : JSON.stringify(v);
         parts.push(k + "=" + (s.length > MAX_CONTEXT_VAL ? s.slice(0, MAX_CONTEXT_VAL) + "…" : s));
     }
-    return parts.length ? parts.join(" ") : "(no args)";
+    return parts.length ? parts.join(" ") : "";
+}
+/** Final /chat JSON body: status tells the client when empty reply is OK vs an error. */
+function buildChatResponse(opts) {
+    const reply = opts.content != null ? String(opts.content) : "";
+    const trimmed = reply.trim();
+    const hadTools = opts.toolActivity.length > 0;
+    const hadCommands = !!(opts.commands && opts.commands.length > 0);
+    const base = {};
+    if (opts.commands && opts.commands.length > 0) {
+        base.commands = opts.commands;
+    }
+    if (opts.usage) {
+        base.usage = opts.usage;
+    }
+    if (hadTools) {
+        base.toolActivity = opts.toolActivity;
+    }
+    if (trimmed) {
+        return { status: "complete", reply, ...base };
+    }
+    if (hadTools || hadCommands) {
+        return {
+            status: "complete",
+            reply: "",
+            complete: true,
+            ...base,
+        };
+    }
+    return {
+        status: "empty",
+        reply: "The model returned no text. Try rephrasing your request or check the server log.",
+        ...base,
+    };
 }
 function logChatRequest(log, userId, context, messageLen) {
     const ctx = context && typeof context === "object" ? context : {};
@@ -423,6 +456,7 @@ function initialize(middlewareOpts) {
             let rounds = 0;
             let lastRoundFingerprint = null;
             const commands = [];
+            const toolActivity = [];
             while (rounds < maxToolRounds) {
                 rounds++;
                 logLlmRequest(logger, rounds);
@@ -450,14 +484,12 @@ function initialize(middlewareOpts) {
                 if (!msg.tool_calls || msg.tool_calls.length === 0) {
                     logLlmResponse(logger, rounds, msg);
                     logLlmResponseDebug(logger, rounds, msg);
-                    const response = { reply: msg.content };
-                    if (commands.length > 0) {
-                        response.commands = commands;
-                    }
-                    if (result.usage) {
-                        response.usage = result.usage;
-                    }
-                    res.json(response);
+                    res.json(buildChatResponse({
+                        content: msg.content,
+                        toolActivity,
+                        commands,
+                        usage: result.usage,
+                    }));
                     return;
                 }
                 const roundFingerprint = getToolCallsFingerprint(msg.tool_calls);
@@ -465,8 +497,10 @@ function initialize(middlewareOpts) {
                     history.pop();
                     logger.warn("chat loop_guard userId=" + userId + " round=" + rounds + " repeated tool calls");
                     res.json({
+                        status: "error",
                         reply: "Stopped: the same tool calls were repeated without progress. Please try rephrasing your request or a different approach.",
                         loopGuard: true,
+                        ...(toolActivity.length > 0 ? { toolActivity } : {}),
                     });
                     return;
                 }
@@ -491,6 +525,11 @@ function initialize(middlewareOpts) {
                     }
                     logToolCall(logger, call.function.name, args);
                     logToolCallDebug(logger, call.function.name, args, toolCtx);
+                    const argsSummary = toolArgsContext(args);
+                    toolActivity.push({
+                        name: call.function.name,
+                        ...(argsSummary ? { argsSummary } : {}),
+                    });
                     const handler = toolMap.get(call.function.name);
                     let toolResult;
                     if (handler) {
@@ -527,9 +566,11 @@ function initialize(middlewareOpts) {
                 if (needClientDataKey) {
                     history.pop();
                     res.json({
+                        status: "continuation",
                         reply: "",
                         continuation: true,
                         requestClientData: { key: needClientDataKey },
+                        ...(toolActivity.length > 0 ? { toolActivity } : {}),
                     });
                     return;
                 }
@@ -542,7 +583,11 @@ function initialize(middlewareOpts) {
                 }
             }
             logger.warn("chat max_rounds userId=" + userId + " rounds=" + maxToolRounds);
-            res.json({ reply: "Reached maximum tool call rounds without a final answer." });
+            res.json({
+                status: "error",
+                reply: "Reached maximum tool call rounds without a final answer.",
+                ...(toolActivity.length > 0 ? { toolActivity } : {}),
+            });
         }
         catch (err) {
             logger.error("chat_error userId=" + userId + " " + err.message);

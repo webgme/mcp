@@ -332,6 +332,57 @@ define(["jquery", "./commands"], function ($: any, Commands: any) {
             .replace(/"/g, "&quot;");
     }
 
+    type ToolActivityItem = { name: string; argsSummary?: string };
+
+    /** Turn /cback/chat JSON into user-visible text (tool calls in italics via markdown *…*). */
+    function formatChatResponse(data: any): string {
+        if (!data || typeof data !== "object") {
+            return "(no response)";
+        }
+        const parts: string[] = [];
+        const activity: ToolActivityItem[] = Array.isArray(data.toolActivity) ? data.toolActivity : [];
+        for (const t of activity) {
+            if (!t || typeof t.name !== "string") continue;
+            const args = t.argsSummary ? " (" + t.argsSummary + ")" : "";
+            parts.push("*" + t.name + args + "*");
+        }
+        const reply = typeof data.reply === "string" ? data.reply.trim() : "";
+        const status = typeof data.status === "string" ? data.status : "";
+
+        if (reply) {
+            if (parts.length > 0) {
+                parts.push("");
+            }
+            parts.push(data.reply.trim());
+            return parts.join("\n");
+        }
+        if (status === "complete" || data.complete === true) {
+            if (parts.length > 0) {
+                parts.push("");
+            }
+            parts.push("*Response complete.*");
+            return parts.join("\n");
+        }
+        if (status === "continuation") {
+            return parts.length > 0 ? parts.join("\n") : "";
+        }
+        if (status === "empty" || status === "error") {
+            if (typeof data.reply === "string" && data.reply.trim() !== "") {
+                const errParts = parts.length > 0 ? parts.concat([""], [data.reply.trim()]) : [data.reply.trim()];
+                return errParts.join("\n");
+            }
+            return parts.length > 0
+                ? parts.join("\n") + "\n\nThe model returned no text. Try rephrasing your request."
+                : "The model returned no text. Try rephrasing your request.";
+        }
+        if (parts.length > 0) {
+            parts.push("");
+            parts.push("*Response complete.*");
+            return parts.join("\n");
+        }
+        return "(no response)";
+    }
+
     function renderMarkdown(text: string): string {
         let html = escapeHtml(text);
 
@@ -634,7 +685,7 @@ define(["jquery", "./commands"], function ($: any, Commands: any) {
             }
 
             this._postChat(payload, (data: any) => {
-                this._appendMessage("GMEBot", data.reply || "(no response)");
+                this._appendMessage("GMEBot", formatChatResponse(data));
                 if (data.commands) {
                     this._executeCommands(data.commands);
                 }

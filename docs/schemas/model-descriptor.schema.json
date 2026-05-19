@@ -1,0 +1,191 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://webgme.org/schemas/model-descriptor/v1.json",
+  "title": "ModelDescriptor",
+  "description": "Canonical instance-model snapshot for GMEBot context (diagram or subtree). Not used in METAAspect-only sessions. JSON Patch applies to this document for instance edits if adopted.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "scope", "nodes"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Schema version. Bump when breaking descriptor shape."
+    },
+    "projectId": {
+      "type": "string",
+      "description": "Optional. WebGME project id when descriptor was built."
+    },
+    "branchName": {
+      "type": "string",
+      "description": "Optional. Branch name when descriptor was built."
+    },
+    "scope": {
+      "$ref": "#/$defs/scope",
+      "description": "What fragment of the model this descriptor covers."
+    },
+    "nodes": {
+      "type": "array",
+      "description": "Instance nodes in scope. For diagram scope, typically one level on the canvas; for subtree/project, depth-first order is recommended.",
+      "items": { "$ref": "#/$defs/node" }
+    },
+    "pointers": {
+      "type": "array",
+      "description": "Instance pointer links (resolved targets).",
+      "items": { "$ref": "#/$defs/pointerLink" }
+    },
+    "sets": {
+      "type": "array",
+      "description": "Instance set memberships.",
+      "items": { "$ref": "#/$defs/setMembership" }
+    },
+    "connections": {
+      "type": "array",
+      "description": "Diagram-level edges when scope.kind is diagram (e.g. connection visualizer paths).",
+      "items": { "$ref": "#/$defs/connection" }
+    }
+  },
+  "$defs": {
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["diagram", "subtree", "project"],
+          "description": "diagram = current canvas level; subtree = hierarchy under containerPath; project = full tree from root."
+        },
+        "containerPath": {
+          "type": "string",
+          "description": "Root path for subtree scope, or diagram owner path. Use '/' or omit for project root."
+        },
+        "activeNodePath": {
+          "type": "string",
+          "description": "Optional. Client selection path when descriptor was built."
+        },
+        "visualizerId": {
+          "type": "string",
+          "description": "Optional. e.g. ModelEditor — confirms instance layer, not METAAspect."
+        }
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "type"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^/",
+          "description": "WebGME instance path (operational id for tools)."
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name attribute when present."
+        },
+        "type": {
+          "type": "string",
+          "description": "META concept name (base type), not path."
+        },
+        "parentPath": {
+          "type": "string",
+          "pattern": "^/",
+          "description": "Optional. Containment parent path."
+        },
+        "attributes": {
+          "type": "object",
+          "description": "Optional subset of attribute values to include in context (keep small).",
+          "additionalProperties": true
+        },
+        "layout": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x", "y"],
+          "properties": {
+            "x": { "type": "number" },
+            "y": { "type": "number" },
+            "width": { "type": "number" },
+            "height": { "type": "number" }
+          },
+          "description": "Diagram position when scope.kind is diagram."
+        }
+      }
+    },
+    "pointerLink": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fromPath", "pointer", "toPath"],
+      "properties": {
+        "fromPath": { "type": "string", "pattern": "^/" },
+        "pointer": { "type": "string" },
+        "toPath": { "type": "string", "pattern": "^/" }
+      }
+    },
+    "setMembership": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ownerPath", "set", "memberPath"],
+      "properties": {
+        "ownerPath": { "type": "string", "pattern": "^/" },
+        "set": { "type": "string" },
+        "memberPath": { "type": "string", "pattern": "^/" }
+      }
+    },
+    "connection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourcePath", "targetPath"],
+      "properties": {
+        "sourcePath": { "type": "string", "pattern": "^/" },
+        "targetPath": { "type": "string", "pattern": "^/" },
+        "connectionPath": {
+          "type": "string",
+          "pattern": "^/",
+          "description": "Optional. Path of the connection node if distinct from endpoints."
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "version": 1,
+      "projectId": "turnstile",
+      "branchName": "master",
+      "scope": {
+        "kind": "diagram",
+        "containerPath": "/1",
+        "visualizerId": "ModelEditor"
+      },
+      "nodes": [
+        {
+          "path": "/1",
+          "name": "Turnstile",
+          "type": "StateMachine",
+          "layout": { "x": 0, "y": 0, "width": 200, "height": 120 }
+        },
+        {
+          "path": "/1/2",
+          "name": "Locked",
+          "type": "State",
+          "parentPath": "/1",
+          "layout": { "x": 40, "y": 40 }
+        },
+        {
+          "path": "/1/3",
+          "name": "coin",
+          "type": "Transition",
+          "parentPath": "/1",
+          "layout": { "x": 120, "y": 60 }
+        }
+      ],
+      "pointers": [
+        { "fromPath": "/1/3", "pointer": "src", "toPath": "/1/2" },
+        { "fromPath": "/1/3", "pointer": "dst", "toPath": "/1/4" }
+      ],
+      "connections": [
+        { "sourcePath": "/1/2", "targetPath": "/1/4", "connectionPath": "/1/3" }
+      ]
+    }
+  ]
+}

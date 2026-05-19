@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://webgme.org/schemas/json-patch-meta/v1.json",
+  "title": "JSONPatchRequest",
+  "description": "RFC 6902 JSON Patch on a MetaDescriptor. Applied to the descriptor document; server translates to WebGME core. With concepts as an array, use /concepts/- to append, /concepts/N/... for index-based edits, or replace the full concepts array for small metamodels.",
+  "type": "array",
+  "minItems": 1,
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["op", "path"],
+    "properties": {
+      "op": {
+        "type": "string",
+        "enum": ["add", "remove", "replace", "move", "copy", "test"]
+      },
+      "path": {
+        "type": "string",
+        "description": "JSON Pointer. Examples: /concepts/-, /concepts/2/pointers/src, /concepts/1/contains/-"
+      },
+      "from": {
+        "type": "string"
+      },
+      "value": {
+        "description": "Fragment per meta-descriptor.schema.json (e.g. a full concept or a string target for a pointer)."
+      }
+    },
+    "allOf": [
+      {
+        "if": { "properties": { "op": { "enum": ["add", "replace"] } }, "required": ["op"] },
+        "then": { "required": ["value"] }
+      },
+      {
+        "if": { "properties": { "op": { "enum": ["move", "copy"] } }, "required": ["op"] },
+        "then": { "required": ["from"] }
+      }
+    ]
+  },
+  "examples": [
+    [
+      {
+        "op": "add",
+        "path": "/concepts/-",
+        "value": {
+          "name": "Transition",
+          "extends": "FCO",
+          "pointers": { "src": ["State:1"], "dst": ["State:1"] },
+          "attributes": { "name": "string" }
+        }
+      },
+      {
+        "op": "add",
+        "path": "/concepts/1/contains/-",
+        "value": "Transition*"
+      },
+      {
+        "op": "add",
+        "path": "/concepts/1/pointers/activeState",
+        "value": "State:0..1"
+      }
+    ]
+  ]
+}
