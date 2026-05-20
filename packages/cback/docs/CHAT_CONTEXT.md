@@ -1,6 +1,6 @@
 # Chat context: what the client can send
 
-The GMEBot widget sends a `context` object with each POST to `/cback/chat`. The backend uses it for defaults (project, branch, active node), **modeling mode** (which tools are exposed), and injects **MetaDescriptor** + **object-list** into the system prompt when a project is open.
+The GMEBot widget sends a `context` object with each POST to `/cback/chat`. The backend uses it for defaults (project, branch, active node), **modeling mode** (which tools are exposed), and injects **MetaDescriptor** + **concept registry** (metamodel) or **object-list** (domain) into the system prompt when a project is open.
 
 ## Currently sent by the client
 
@@ -12,7 +12,7 @@ The GMEBot widget sends a `context` object with each POST to `/cback/chat`. The 
 | **activeVisualizerId** | `WebGMEGlobal.State.getActiveVisualizer()` | Active visualizer id (e.g. `ModelEditor`, `METAAspect`, `GMEBot`). From `Visualizers.json` / deployment. |
 | **activeTabId** | `WebGMEGlobal.State.getActiveTab()` | Active tab index (number). In the Meta Editor this is the **meta sheet index** (0-based) in the project’s MetaSheets registry. |
 | **modelingMode** | GMEBot **Mode** toggle | `metamodel` or `domain`. Metamodel exposes only `patchMetaDescriptor`; domain hides all tools for now. |
-| **objectList** | GMEBot staging (`existing` / `new` / `deleted`) | Each item: `{ name, path, guid }`. Server fills `existing` from open project meta nodes when possible. |
+| **objectList** | GMEBot staging (`existing` / `new` / `deleted`) | Client sends `{ name, path, guid }` per item. In **metamodel** mode the LLM sees only **names** via `[Concept registry]` (`existing` / `new` / `deleted` string arrays). Paths/guids are not exposed to the model. |
 
 ## WebGME State: what else is available
 

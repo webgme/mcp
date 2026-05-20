@@ -1,11 +1,14 @@
 import {
+    buildConceptRegistryFromCore,
+    buildConceptRegistryFromObjectList,
     buildMetaDescriptorFromCore,
     buildObjectListFromCore,
+    type ConceptRegistry,
     type MetaDescriptor,
     type ObjectList,
 } from "./metaDescriptor";
-import type { ToolContext } from "./tools";
-import { resolveModelingMode, type ModelingMode } from "./tools";
+import type { ToolContext } from "./toolRegistry";
+import { resolveModelingMode, type ModelingMode } from "./toolRegistry";
 
 const MAX_CONTEXT_JSON_CHARS = 12000;
 
@@ -18,6 +21,8 @@ function truncateJson(obj: unknown, maxChars: number): string {
 export type SessionContextPayload = {
     modelingMode: ModelingMode;
     metaDescriptor?: MetaDescriptor;
+    /** Metamodel: name-only registry for the LLM. Domain: full object list (paths kept for future tools). */
+    conceptRegistry?: ConceptRegistry;
     objectList?: ObjectList;
 };
 
@@ -26,21 +31,21 @@ export function buildSessionContextPayload(ctx: ToolContext): SessionContextPayl
     const mode = resolveModelingMode(ctx.context);
     const clientList = ctx.context?.objectList;
     if (!ctx.coreSession) {
-        return {
-            modelingMode: mode,
-            objectList: {
-                existing: clientList?.existing ?? [],
-                new: clientList?.new ?? [],
-                deleted: clientList?.deleted ?? [],
-            },
+        const stubList: ObjectList = {
+            existing: clientList?.existing ?? [],
+            new: clientList?.new ?? [],
+            deleted: clientList?.deleted ?? [],
         };
+        return mode === "metamodel"
+            ? { modelingMode: mode, conceptRegistry: buildConceptRegistryFromObjectList(stubList) }
+            : { modelingMode: mode, objectList: stubList };
     }
     const { core, root } = ctx.coreSession;
     if (mode === "metamodel") {
         return {
             modelingMode: mode,
             metaDescriptor: buildMetaDescriptorFromCore(core, root),
-            objectList: buildObjectListFromCore(core, root, clientList),
+            conceptRegistry: buildConceptRegistryFromCore(core, root, clientList),
         };
     }
     return {
@@ -56,11 +61,26 @@ export function formatContextBlocksForSystem(payload: SessionContextPayload | nu
     parts.push("modelingMode=" + payload.modelingMode);
     if (payload.modelingMode === "metamodel") {
         parts.push(
-            "You are editing the **metamodel** (META types). Use patchMetaDescriptor with JSON Patch on the MetaDescriptor below."
+            "[Metamodel editing — internal, do not repeat to the user]\n" +
+                "Use patchMetaDescriptor on the Meta descriptor below. Names only (no paths/guids). " +
+                "Maps keyed by name: /concepts/State, /concepts/StateMachine/contains/State, /relationships/Transition. " +
+                "Main container = domain name (StateMachine, not Diagram); contains must list node types and connection types. " +
+                "Each link: concepts.Transition = {} plus relationships.Transition = { from, to }. No attributes.name."
+        );
+        parts.push(
+            "[How to reply to the user]\n" +
+                "Describe the metamodel in modeling terms: what the main model is called, which element types exist, how connections work. " +
+                "Do not explain JSON Patch, descriptor structure, contains/relationships syntax, FCO, or cardinality unless asked."
         );
         if (payload.metaDescriptor) {
             parts.push(
-                "[Meta descriptor]\n" + truncateJson(payload.metaDescriptor, MAX_CONTEXT_JSON_CHARS)
+                "[Meta descriptor — for edits only, not for quoting to the user]\n" +
+                    truncateJson(payload.metaDescriptor, MAX_CONTEXT_JSON_CHARS)
+            );
+        }
+        if (payload.conceptRegistry) {
+            parts.push(
+                "[Concept registry]\n" + truncateJson(payload.conceptRegistry, MAX_CONTEXT_JSON_CHARS)
             );
         }
     } else {
@@ -68,7 +88,7 @@ export function formatContextBlocksForSystem(payload: SessionContextPayload | nu
             "You are in **domain modeling** mode. Instance-edit tools are hidden for now; answer from context and explain what would change."
         );
     }
-    if (payload.objectList) {
+    if (payload.modelingMode !== "metamodel" && payload.objectList) {
         parts.push("[Object list]\n" + truncateJson(payload.objectList, MAX_CONTEXT_JSON_CHARS));
     }
     return parts.join("\n\n");
@@ -81,7 +101,8 @@ export function formatTurnContextLine(ctx: ToolContext): string {
     const bits: string[] = [];
     if (c.projectId) bits.push("projectId=" + c.projectId);
     if (c.branchName) bits.push("branchName=" + c.branchName);
-    if (c.activeNodeId) bits.push("activeNodeId=" + c.activeNodeId);
+    const mode = resolveModelingMode(c);
+    if (mode !== "metamodel" && c.activeNodeId) bits.push("activeNodeId=" + c.activeNodeId);
     if (c.activeVisualizerId) bits.push("activeVisualizerId=" + c.activeVisualizerId);
     if (typeof c.activeTabId === "number") bits.push("activeTabId=" + c.activeTabId);
     if (c.modelingMode) bits.push("modelingMode=" + c.modelingMode);

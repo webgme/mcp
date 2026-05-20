@@ -1,7 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.NODE_TOOLS = exports.getDiagramLayout = exports.bulkSet = exports.clearRegistry = exports.getRegistry = exports.setRegistry = exports.clearAttribute = exports.getAttribute = exports.setAttribute = exports.getPropertyNames = exports.setProperty = exports.getProperty = exports.findNodesByName = exports.deleteNode = exports.listNodes = exports.moveNode = exports.createNode = void 0;
-const tools_1 = require("../tools");
+const toolRegistry_1 = require("../toolRegistry");
 const DEFAULT_BASE_TYPE = "FCO";
 const PATH_SEP = "/";
 /** Path for loadByPath: "" or "/" means root (we pass "" to loadByPath), else path must start with /. */
@@ -173,7 +173,7 @@ exports.createNode = {
                 return { data: { error: created.message } };
             }
             const path = created ? core.getPath(created) : null;
-            await (0, tools_1.commitCoreSession)(ctx.coreSession, "GMEBot: createNode");
+            await (0, toolRegistry_1.commitCoreSession)(ctx.coreSession, "GMEBot: createNode");
             return {
                 data: {
                     created: true,
@@ -184,7 +184,7 @@ exports.createNode = {
             };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "createNode", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "createNode", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -256,7 +256,7 @@ exports.moveNode = {
             const containerName = (_c = core.getAttribute(newParent, "name")) !== null && _c !== void 0 ? _c : newContainerRaw;
             // moveNode returns the updated node; use it for paths (commit does not refresh cached refs).
             const movedNode = core.moveNode(node, newParent);
-            await (0, tools_1.commitCoreSession)(ctx.coreSession, "GMEBot: moveNode");
+            await (0, toolRegistry_1.commitCoreSession)(ctx.coreSession, "GMEBot: moveNode");
             const newNodePath = core.getPath(movedNode);
             const newContainerPath = core.getPath(newParent);
             return {
@@ -272,7 +272,7 @@ exports.moveNode = {
             };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "moveNode", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "moveNode", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -356,7 +356,7 @@ exports.listNodes = {
             };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "listNodes", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "listNodes", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -393,14 +393,14 @@ exports.deleteNode = {
                     return { data: { error: "Node not found: " + toDisplayPath(nodePath) } };
                 }
                 core.deleteNode(node);
-                await (0, tools_1.commitCoreSession)(ctx.coreSession, "GMEBot: deleteNode");
+                await (0, toolRegistry_1.commitCoreSession)(ctx.coreSession, "GMEBot: deleteNode");
                 return {
                     data: { deleted: true, nodePath: toDisplayPath(nodePath) },
                     commands: [{ type: "deleteNode", args: { nodeId: toDisplayPath(nodePath) } }],
                 };
             }
             catch (e) {
-                (0, tools_1.logToolFailure)(ctx, "deleteNode", args, e);
+                (0, toolRegistry_1.logToolFailure)(ctx, "deleteNode", args, e);
                 return { data: { error: (e && e.message) || String(e) } };
             }
         }
@@ -488,7 +488,7 @@ exports.findNodesByName = {
             return { data };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "findNodesByName", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "findNodesByName", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -588,7 +588,7 @@ exports.getProperty = {
             };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "getProperty", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "getProperty", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -653,7 +653,7 @@ exports.setProperty = {
                 const res = core.setAttribute(node, name, value);
                 if (res)
                     return { data: { error: res.message || String(res) } };
-                await (0, tools_1.commitCoreSession)(ctx.coreSession, "GMEBot: setProperty");
+                await (0, toolRegistry_1.commitCoreSession)(ctx.coreSession, "GMEBot: setProperty");
                 return { data: { set: true, nodePath: toDisplayPath(core.getPath(node)), name, in: "attributes" } };
             }
             if (regNames.includes(name)) {
@@ -670,13 +670,13 @@ exports.setProperty = {
                 const res = core.setRegistry(node, name, valueToSet);
                 if (res)
                     return { data: { error: res.message || String(res) } };
-                await (0, tools_1.commitCoreSession)(ctx.coreSession, "GMEBot: setProperty");
+                await (0, toolRegistry_1.commitCoreSession)(ctx.coreSession, "GMEBot: setProperty");
                 return { data: { set: true, nodePath: toDisplayPath(core.getPath(node)), name, in: "registry" } };
             }
             return { data: { error: "Property '" + name + "' not found. Call getProperty with no name to list available properties." } };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "setProperty", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "setProperty", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -756,7 +756,7 @@ exports.getPropertyNames = {
             };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "getPropertyNames", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "getPropertyNames", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -818,7 +818,7 @@ exports.setAttribute = {
                 if (res) {
                     return { data: { error: res.message || String(res) } };
                 }
-                await (0, tools_1.commitCoreSession)(ctx.coreSession, "GMEBot: setAttribute");
+                await (0, toolRegistry_1.commitCoreSession)(ctx.coreSession, "GMEBot: setAttribute");
                 return {
                     data: {
                         set: true,
@@ -828,7 +828,7 @@ exports.setAttribute = {
                 };
             }
             catch (e) {
-                (0, tools_1.logToolFailure)(ctx, "setAttribute", args, e);
+                (0, toolRegistry_1.logToolFailure)(ctx, "setAttribute", args, e);
                 return { data: { error: (e && e.message) || String(e) } };
             }
         }
@@ -949,7 +949,7 @@ exports.clearAttribute = {
                 if (res) {
                     return { data: { error: res.message || String(res) } };
                 }
-                await (0, tools_1.commitCoreSession)(ctx.coreSession, "GMEBot: clearAttribute");
+                await (0, toolRegistry_1.commitCoreSession)(ctx.coreSession, "GMEBot: clearAttribute");
                 return {
                     data: {
                         cleared: true,
@@ -959,7 +959,7 @@ exports.clearAttribute = {
                 };
             }
             catch (e) {
-                (0, tools_1.logToolFailure)(ctx, "clearAttribute", args, e);
+                (0, toolRegistry_1.logToolFailure)(ctx, "clearAttribute", args, e);
                 return { data: { error: (e && e.message) || String(e) } };
             }
         }
@@ -1040,7 +1040,7 @@ exports.setRegistry = {
                 if (res) {
                     return { data: { error: res.message || String(res) } };
                 }
-                await (0, tools_1.commitCoreSession)(ctx.coreSession, "GMEBot: setRegistry");
+                await (0, toolRegistry_1.commitCoreSession)(ctx.coreSession, "GMEBot: setRegistry");
                 return {
                     data: {
                         set: true,
@@ -1050,7 +1050,7 @@ exports.setRegistry = {
                 };
             }
             catch (e) {
-                (0, tools_1.logToolFailure)(ctx, "setRegistry", args, e);
+                (0, toolRegistry_1.logToolFailure)(ctx, "setRegistry", args, e);
                 return { data: { error: (e && e.message) || String(e) } };
             }
         }
@@ -1171,7 +1171,7 @@ exports.clearRegistry = {
                 if (res) {
                     return { data: { error: res.message || String(res) } };
                 }
-                await (0, tools_1.commitCoreSession)(ctx.coreSession, "GMEBot: clearRegistry");
+                await (0, toolRegistry_1.commitCoreSession)(ctx.coreSession, "GMEBot: clearRegistry");
                 return {
                     data: {
                         cleared: true,
@@ -1181,7 +1181,7 @@ exports.clearRegistry = {
                 };
             }
             catch (e) {
-                (0, tools_1.logToolFailure)(ctx, "clearRegistry", args, e);
+                (0, toolRegistry_1.logToolFailure)(ctx, "clearRegistry", args, e);
                 return { data: { error: (e && e.message) || String(e) } };
             }
         }
@@ -1301,7 +1301,7 @@ exports.bulkSet = {
             if (errors.length > 0 && updated.length === 0) {
                 return { data: { error: errors.join("; ") } };
             }
-            await (0, tools_1.commitCoreSession)(ctx.coreSession, "GMEBot: bulkSet");
+            await (0, toolRegistry_1.commitCoreSession)(ctx.coreSession, "GMEBot: bulkSet");
             return {
                 data: {
                     committed: true,
@@ -1311,7 +1311,7 @@ exports.bulkSet = {
             };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "bulkSet", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "bulkSet", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -1343,7 +1343,7 @@ exports.getDiagramLayout = {
             return { data: { diagramLayout: layout } };
         }
         return {
-            data: { needClientData: tools_1.NEED_CLIENT_DATA_KEYS.diagramLayout },
+            data: { needClientData: toolRegistry_1.NEED_CLIENT_DATA_KEYS.diagramLayout },
         };
     },
 };

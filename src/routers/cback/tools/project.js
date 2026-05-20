@@ -1,7 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.PROJECT_TOOLS = exports.switchProject = exports.listProjects = exports.deleteProject = exports.createProject = exports.listSeeds = void 0;
-const tools_1 = require("../tools");
+const toolRegistry_1 = require("../toolRegistry");
 exports.listSeeds = {
     definition: {
         name: "listSeeds",
@@ -88,7 +88,7 @@ exports.createProject = {
             };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "createProject", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "createProject", args, e);
             return {
                 data: {
                     created: false,
@@ -136,7 +136,7 @@ exports.deleteProject = {
             };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "deleteProject", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "deleteProject", args, e);
             return {
                 data: {
                     deleted: false,

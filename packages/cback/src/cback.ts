@@ -9,7 +9,7 @@ import {
     NEED_CLIENT_DATA_KEYS,
     isToolEnabled,
     resolveModelingMode,
-} from "./tools";
+} from "./toolRegistry";
 import {
     buildSessionContextPayload,
     formatContextBlocksForSystem,
@@ -31,14 +31,23 @@ type MiddlewareOptions = {
 const SYSTEM_PROMPT_BASE =
     "You are GMEBot, an assistant embedded in a WebGME modeling environment. " +
     "Use the API tool-calling mechanism when a tool is available — each action must be a named tool invocation, not free-form JSON pretending to be a tool. " +
-    "When referring to concepts or nodes, use Name (path), e.g. State (/3). " +
-    "The client sends modelingMode (metamodel | domain), project/selection context, a MetaDescriptor snapshot, and an object-list (existing / new / deleted). " +
+    "In metamodel mode, concepts are identified by **name** only — never use paths, guids, or node ids in patches or when referring to META types. " +
+    "The client sends modelingMode, a MetaDescriptor snapshot, and a concept registry (existing / new / deleted names). " +
     "Do not ask to fetch the metamodel first — it is already in context. " +
     "In metamodel mode the only tool is patchMetaDescriptor: apply RFC 6902 JSON Patch to the MetaDescriptor (see docs/schemas/meta-descriptor.schema.json). " +
-    "Prefer small, focused patches. For a new concept use {\"op\":\"add\",\"path\":\"/concepts/-\",\"value\":{\"name\":\"...\",\"extends\":\"FCO\",...}}. " +
-    "Connection types belong in relationships (e.g. \"Transition: State -> State\") or concept pointers src/dst. " +
+    "MetaDescriptor uses **objects keyed by name**, not arrays: patch /concepts/State, /concepts/StateMachine/contains/State, /relationships/Transition. " +
+    "Never put cardinality in concept names (wrong: concepts.State:*; right: concepts.State and StateMachine.contains.State = \"*\"). " +
+    "Never add attributes.name — the name attribute is inherited from FCO. " +
+    "Metamodel structure: (1) **main container** named for the domain (StateMachine, not Diagram) — contains must list **both** node types and **connection** types (Transition, etc.) so they can be instantiated; " +
+    "(2) each link type as concepts.{Name} = {} (empty = FCO) plus relationships.{Name} = { from, to }; " +
+    "(3) other node concepts as needed. Never use Diagram, ConnectionName, or Connector as concept names. " +
+    "Prefer one patch with all concepts, main container contains, and relationships. " +
+    "Omit extends when a concept extends FCO (use \"FCO\" only in contains/pointers/relationship ends when needed). " +
+    "**User-facing replies (metamodel):** After patchMetaDescriptor, summarize what the user can now model — type names, what goes inside the main container, how links work — in everyday modeling language. " +
+    "Do not walk the user through MetaDescriptor, JSON Patch, contains maps, relationships blocks, FCO, cardinality, or tool results unless they ask for technical detail. " +
+    "Never assume the user knows the descriptor format; the format is your edit surface only. " +
     "In domain mode tools are hidden for now — explain changes clearly from context. " +
-    "If a tool returns an error, report it. In WebGME, FCO means First Class Object.";
+    "If a tool returns an error, describe the problem in plain language; use technical detail only when helpful.";
 
 const MAX_TOOL_ROUNDS = 5; // default; override with CBACK_MAX_TOOL_ROUNDS env
 
@@ -62,17 +71,49 @@ const MAX_HISTORY_MESSAGES = 40;
 /** Cap size of tool result content in history (chars) to limit tokens. */
 const MAX_TOOL_RESULT_CHARS = 2500;
 
-/** Build a stable fingerprint of tool_calls to detect repeated identical rounds (loop guard). */
+/** Stable fingerprint of an LLM tool-call round (order preserved — do not sort). */
 function getToolCallsFingerprint(toolCalls: any[]): string {
     if (!toolCalls || toolCalls.length === 0) return "";
-    const parts = toolCalls.map((c: any) => {
-        const name = (c.function && c.function.name) ? String(c.function.name) : "";
-        const args = c.function && c.function.arguments;
-        const argsStr = typeof args === "string" ? args : (args != null ? JSON.stringify(args) : "");
-        return name + ":" + argsStr.slice(0, 400);
-    });
-    parts.sort();
-    return parts.join(" | ");
+    return toolCalls
+        .map((c: any) => {
+            const name = c.function && c.function.name ? String(c.function.name) : "";
+            const args = c.function && c.function.arguments;
+            const argsStr = typeof args === "string" ? args : args != null ? JSON.stringify(args) : "";
+            return name + ":" + argsStr.slice(0, 400);
+        })
+        .join(" | ");
+}
+
+/** Compact tool message for chat history (full meta descriptor lives in refreshed system context). */
+function toolResultContentForHistory(toolName: string, toolResult: any): string {
+    if (toolName === "patchMetaDescriptor") {
+        if (toolResult && (toolResult.error || toolResult.ok === false)) {
+            return JSON.stringify({ ok: false, error: toolResult.error || "patch failed" });
+        }
+        const out: { ok: boolean; warnings?: string[] } = { ok: true };
+        if (Array.isArray(toolResult?.warnings) && toolResult.warnings.length) {
+            out.warnings = toolResult.warnings;
+        }
+        return JSON.stringify(out);
+    }
+    const raw = JSON.stringify(toolResult);
+    return raw.length <= MAX_TOOL_RESULT_CHARS
+        ? raw
+        : raw.substring(0, MAX_TOOL_RESULT_CHARS) + " [truncated]";
+}
+
+function toolRoundMadeProgress(toolResults: { content: string }[]): boolean {
+    for (const tr of toolResults) {
+        try {
+            const data = JSON.parse(tr.content);
+            if (data && data.ok === true) {
+                return true;
+            }
+        } catch {
+            /* ignore */
+        }
+    }
+    return false;
 }
 
 /** Match only when "project" is explicitly mentioned — avoid matching "switch to the diagram" etc. */
@@ -139,36 +180,19 @@ async function ensureProjectListInContext(
 
 const sessions = new Map<string, ChatMessage[]>();
 
-/** Logging: info = event + main context (e.g. tool name, node path); debug = full parameters/payloads. */
-const TOOL_CONTEXT_KEYS = [
-    "nodePath", "nodeId", "containerPath", "projectId", "path", "name", "conceptPath",
-    "sourcePath", "targetPath", "message", "setId", "branchName", "activeNodeId", "container",
-] as const;
-const MAX_CONTEXT_VAL = 80;
-
-function toolArgsContext(args: Record<string, any>): string {
-    const parts: string[] = [];
-    for (const k of TOOL_CONTEXT_KEYS) {
-        const v = args[k];
-        if (v === undefined || v === null) continue;
-        const s = typeof v === "string" ? v : JSON.stringify(v);
-        parts.push(k + "=" + (s.length > MAX_CONTEXT_VAL ? s.slice(0, MAX_CONTEXT_VAL) + "…" : s));
-    }
-    return parts.length ? parts.join(" ") : "";
-}
-
-export type ToolActivityItem = { name: string; argsSummary?: string };
+/** Max chars for tool_call / tool_response bodies at info level (server log). */
+const MAX_TOOL_LOG_CHARS = 48000;
 
 /** Final /chat JSON body: status tells the client when empty reply is OK vs an error. */
 function buildChatResponse(opts: {
     content: unknown;
-    toolActivity: ToolActivityItem[];
+    toolsUsed?: boolean;
     commands?: ClientCommand[];
     usage?: { prompt_tokens: number; completion_tokens: number; total_tokens?: number };
 }): Record<string, unknown> {
     const reply = opts.content != null ? String(opts.content) : "";
     const trimmed = reply.trim();
-    const hadTools = opts.toolActivity.length > 0;
+    const hadTools = !!opts.toolsUsed;
     const hadCommands = !!(opts.commands && opts.commands.length > 0);
 
     const base: Record<string, unknown> = {};
@@ -179,7 +203,7 @@ function buildChatResponse(opts: {
         base.usage = opts.usage;
     }
     if (hadTools) {
-        base.toolActivity = opts.toolActivity;
+        base.toolsUsed = true;
     }
 
     if (trimmed) {
@@ -227,6 +251,22 @@ function logLlmResponse(log: any, round: number, msg: any): void {
     if (msg.tool_calls && msg.tool_calls.length > 0) {
         const names = msg.tool_calls.map((c: any) => c.function?.name || "?").join(",");
         log.info("llm_response round=" + round + " tool_calls=" + msg.tool_calls.length + " " + names);
+        for (const c of msg.tool_calls) {
+            const raw = {
+                id: c.id,
+                name: c.function?.name,
+                arguments: c.function?.arguments,
+            };
+            const line = JSON.stringify(raw);
+            log.info(
+                "llm_tool_call round=" +
+                    round +
+                    " " +
+                    (line.length > MAX_TOOL_LOG_CHARS
+                        ? line.slice(0, MAX_TOOL_LOG_CHARS) + "…"
+                        : line)
+            );
+        }
     } else {
         const len = typeof msg.content === "string" ? msg.content.length : 0;
         log.info("llm_response round=" + round + " contentLen=" + len);
@@ -245,13 +285,30 @@ function logLlmResponseDebug(log: any, round: number, msg: any): void {
     }
 }
 
-function logToolCall(log: any, name: string, args: Record<string, any>): void {
-    log.info("tool_call " + name + " " + toolArgsContext(args));
+function logToolCall(
+    log: any,
+    name: string,
+    args: Record<string, any>,
+    meta?: { toolCallId?: string }
+): void {
+    const payload: Record<string, unknown> = { tool: name, arguments: args };
+    if (meta?.toolCallId) payload.id = meta.toolCallId;
+    const line = JSON.stringify(payload);
+    log.info(
+        "tool_call " +
+            (line.length > MAX_TOOL_LOG_CHARS ? line.slice(0, MAX_TOOL_LOG_CHARS) + "…" : line)
+    );
 }
 
 function logToolCallDebug(log: any, name: string, args: Record<string, any>, ctx: ToolContext): void {
-    log.debug("tool_call " + name + " args=" + JSON.stringify(args) + " hasCoreSession=" + !!ctx.coreSession +
-        " context=" + JSON.stringify(ctx.context));
+    log.debug(
+        "tool_call " +
+            name +
+            " hasCoreSession=" +
+            !!ctx.coreSession +
+            " context=" +
+            JSON.stringify(ctx.context)
+    );
 }
 
 function logToolResponse(log: any, name: string, result: any, err?: Error): void {
@@ -264,14 +321,15 @@ function logToolResponse(log: any, name: string, result: any, err?: Error): void
         log.info("tool_response " + name + " error " + String(error).slice(0, 120));
         return;
     }
-    const path = result && (result.path ?? result.nodePath ?? result.createdPath);
-    const extra = path != null ? " path=" + String(path).slice(0, MAX_CONTEXT_VAL) : "";
-    log.info("tool_response " + name + " ok" + extra);
+    const line = JSON.stringify({ tool: name, result });
+    log.info(
+        "tool_response " +
+            (line.length > MAX_TOOL_LOG_CHARS ? line.slice(0, MAX_TOOL_LOG_CHARS) + "…" : line)
+    );
 }
 
 function logToolResponseDebug(log: any, name: string, result: any): void {
-    const str = JSON.stringify(result);
-    log.debug("tool_response " + name + " " + (str.length > 2000 ? str.slice(0, 2000) + "…" : str));
+    log.debug("tool_response " + name + " (duplicate of info log)");
 }
 
 function getSession(userId: string): ChatMessage[] {
@@ -490,8 +548,9 @@ function initialize(middlewareOpts: MiddlewareOptions) {
 
             let rounds = 0;
             let lastRoundFingerprint: string | null = null;
+            let identicalToolRoundStreak = 0;
             const commands: ClientCommand[] = [];
-            const toolActivity: ToolActivityItem[] = [];
+            let toolsUsedThisChat = false;
 
             while (rounds < maxToolRounds) {
                 rounds++;
@@ -536,7 +595,7 @@ function initialize(middlewareOpts: MiddlewareOptions) {
                     res.json(
                         buildChatResponse({
                             content: msg.content,
-                            toolActivity,
+                            toolsUsed: toolsUsedThisChat,
                             commands,
                             usage: result.usage,
                         })
@@ -546,17 +605,33 @@ function initialize(middlewareOpts: MiddlewareOptions) {
 
                 const roundFingerprint = getToolCallsFingerprint(msg.tool_calls);
                 if (roundFingerprint && roundFingerprint === lastRoundFingerprint) {
+                    identicalToolRoundStreak++;
+                } else {
+                    identicalToolRoundStreak = 0;
+                }
+                lastRoundFingerprint = roundFingerprint;
+
+                if (identicalToolRoundStreak >= 2) {
                     history.pop();
-                    logger.warn("chat loop_guard userId=" + userId + " round=" + rounds + " repeated tool calls");
+                    logger.warn(
+                        "chat loop_guard userId=" +
+                            userId +
+                            " round=" +
+                            rounds +
+                            " streak=" +
+                            identicalToolRoundStreak +
+                            " fingerprint=" +
+                            roundFingerprint.slice(0, 120)
+                    );
                     res.json({
                         status: "error",
-                        reply: "Stopped: the same tool calls were repeated without progress. Please try rephrasing your request or a different approach.",
+                        reply:
+                            "Stopped: the model repeated the same tool calls several times without progress. The metamodel may already be updated — try asking a follow-up question.",
                         loopGuard: true,
-                        ...(toolActivity.length > 0 ? { toolActivity } : {}),
+                        toolsUsed: toolsUsedThisChat,
                     });
                     return;
                 }
-                lastRoundFingerprint = roundFingerprint;
 
                 const toolResultsThisRound: { content: string; tool_call_id: string }[] = [];
                 let needClientDataKey: string | null = null;
@@ -576,14 +651,8 @@ function initialize(middlewareOpts: MiddlewareOptions) {
                         args = rawArgs;
                     }
 
-                    logToolCall(logger, call.function.name, args);
+                    logToolCall(logger, call.function.name, args, { toolCallId: call.id });
                     logToolCallDebug(logger, call.function.name, args, toolCtx);
-
-                    const argsSummary = toolArgsContext(args);
-                    toolActivity.push({
-                        name: call.function.name,
-                        ...(argsSummary ? { argsSummary } : {}),
-                    });
 
                     const handler = toolMap.get(call.function.name);
                     let toolResult: any;
@@ -603,6 +672,7 @@ function initialize(middlewareOpts: MiddlewareOptions) {
                         try {
                             const handlerResult = await handler(args, toolCtx);
                             toolResult = handlerResult.data;
+                            toolsUsedThisChat = true;
                             if (handlerResult.commands) {
                                 commands.push(...handlerResult.commands);
                             }
@@ -623,11 +693,10 @@ function initialize(middlewareOpts: MiddlewareOptions) {
                         toolResult = { error: `Unknown tool: ${call.function.name}` };
                     }
 
-                    const contentStr = (() => {
-                        const raw = JSON.stringify(toolResult);
-                        return raw.length <= MAX_TOOL_RESULT_CHARS ? raw : raw.substring(0, MAX_TOOL_RESULT_CHARS) + " [truncated]";
-                    })();
-                    toolResultsThisRound.push({ content: contentStr, tool_call_id: call.id });
+                    toolResultsThisRound.push({
+                        content: toolResultContentForHistory(call.function.name, toolResult),
+                        tool_call_id: call.id,
+                    });
                 }
 
                 if (needClientDataKey) {
@@ -637,7 +706,7 @@ function initialize(middlewareOpts: MiddlewareOptions) {
                         reply: "",
                         continuation: true,
                         requestClientData: { key: needClientDataKey },
-                        ...(toolActivity.length > 0 ? { toolActivity } : {}),
+                        toolsUsed: toolsUsedThisChat,
                     });
                     return;
                 }
@@ -649,13 +718,19 @@ function initialize(middlewareOpts: MiddlewareOptions) {
                         tool_call_id: tr.tool_call_id,
                     });
                 }
+
+                if (toolRoundMadeProgress(toolResultsThisRound)) {
+                    identicalToolRoundStreak = 0;
+                    lastRoundFingerprint = null;
+                }
+                refreshSystemMessage(history, toolCtx);
             }
 
             logger.warn("chat max_rounds userId=" + userId + " rounds=" + maxToolRounds);
             res.json({
                 status: "error",
                 reply: "Reached maximum tool call rounds without a final answer.",
-                ...(toolActivity.length > 0 ? { toolActivity } : {}),
+                toolsUsed: toolsUsedThisChat,
             });
         } catch (err: any) {
             logger.error("chat_error userId=" + userId + " " + err.message);

@@ -338,53 +338,38 @@ define(["jquery", "./commands"], function ($: any, Commands: any) {
             .replace(/"/g, "&quot;");
     }
 
-    type ToolActivityItem = { name: string; argsSummary?: string };
-
-    /** Turn /cback/chat JSON into user-visible text (tool calls in italics via markdown *…*). */
+    /** Turn /cback/chat JSON into user-visible text (no raw tool payloads). */
     function formatChatResponse(data: any): string {
         if (!data || typeof data !== "object") {
             return "(no response)";
         }
-        const parts: string[] = [];
-        const activity: ToolActivityItem[] = Array.isArray(data.toolActivity) ? data.toolActivity : [];
-        for (const t of activity) {
-            if (!t || typeof t.name !== "string") continue;
-            const args = t.argsSummary ? " (" + t.argsSummary + ")" : "";
-            parts.push("*" + t.name + args + "*");
-        }
         const reply = typeof data.reply === "string" ? data.reply.trim() : "";
         const status = typeof data.status === "string" ? data.status : "";
+        const toolsUsed = data.toolsUsed === true;
 
         if (reply) {
-            if (parts.length > 0) {
-                parts.push("");
-            }
-            parts.push(data.reply.trim());
-            return parts.join("\n");
+            return reply;
         }
         if (status === "complete" || data.complete === true) {
-            if (parts.length > 0) {
-                parts.push("");
+            if (toolsUsed) {
+                return "Applied changes to the metamodel.";
             }
-            parts.push("*Response complete.*");
-            return parts.join("\n");
+            return "Response complete.";
         }
         if (status === "continuation") {
-            return parts.length > 0 ? parts.join("\n") : "";
+            return "";
         }
         if (status === "empty" || status === "error") {
             if (typeof data.reply === "string" && data.reply.trim() !== "") {
-                const errParts = parts.length > 0 ? parts.concat([""], [data.reply.trim()]) : [data.reply.trim()];
-                return errParts.join("\n");
+                return data.reply.trim();
             }
-            return parts.length > 0
-                ? parts.join("\n") + "\n\nThe model returned no text. Try rephrasing your request."
-                : "The model returned no text. Try rephrasing your request.";
+            if (toolsUsed) {
+                return "Applied changes to the metamodel. The model returned no summary text — you can ask a follow-up.";
+            }
+            return "The model returned no text. Try rephrasing your request.";
         }
-        if (parts.length > 0) {
-            parts.push("");
-            parts.push("*Response complete.*");
-            return parts.join("\n");
+        if (toolsUsed) {
+            return "Applied changes to the metamodel.";
         }
         return "(no response)";
     }

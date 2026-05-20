@@ -1,7 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.META_TOOLS = exports.setConceptLayout = exports.setConceptPosition = exports.getMetaInfo = exports.checkModelConsistency = exports.checkMetaConsistency = exports.delMetaMixin = exports.setMetaMixin = exports.setMetaSet = exports.delMetaSet = exports.delMetaPointer = exports.setMetaPointer = exports.delMetaContainment = exports.setMetaContainment = exports.delMetaAttribute = exports.setMetaAttribute = exports.createMetaNode = exports.isMetaNodeTool = exports.deleteMetaSheet = exports.switchToMetaSheet = exports.createMetaSheet = void 0;
-const tools_1 = require("../tools");
+const toolRegistry_1 = require("../toolRegistry");
+const metaCoreOps_1 = require("../metaCoreOps");
 const node_1 = require("./node");
 const META_SHEETS_REGISTRY = "MetaSheets";
 const META_ASPECT_SET_NAME = "MetaAspectSet";
@@ -151,7 +152,7 @@ exports.createMetaSheet = {
             };
             sheets.push(newSheetDesc);
             core.setRegistry(root, META_SHEETS_REGISTRY, sheets);
-            await (0, tools_1.commitCoreSession)(ctx.coreSession, "GMEBot: createMetaSheet");
+            await (0, toolRegistry_1.commitCoreSession)(ctx.coreSession, "GMEBot: createMetaSheet");
             return {
                 data: {
                     created: true,
@@ -163,7 +164,7 @@ exports.createMetaSheet = {
             };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "createMetaSheet", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "createMetaSheet", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -320,7 +321,7 @@ exports.deleteMetaSheet = {
             core.setRegistry(root, META_SHEETS_REGISTRY, sheets);
             // Delete the underlying set.
             core.deleteSet(root, setId);
-            await (0, tools_1.commitCoreSession)(ctx.coreSession, "GMEBot: deleteMetaSheet");
+            await (0, toolRegistry_1.commitCoreSession)(ctx.coreSession, "GMEBot: deleteMetaSheet");
             return {
                 data: {
                     deleted: true,
@@ -331,7 +332,7 @@ exports.deleteMetaSheet = {
             };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "deleteMetaSheet", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "deleteMetaSheet", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -381,7 +382,7 @@ exports.isMetaNodeTool = {
             };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "isMetaNode", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "isMetaNode", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -515,24 +516,7 @@ exports.createMetaNode = {
             const node = created;
             const nodePath = core.getPath(node);
             core.setAttribute(node, "name", name);
-            // Add to global MetaAspectSet.
-            core.addMember(root, META_ASPECT_SET_NAME, node);
-            // If there is at least one meta sheet, add to the first one (by order).
-            const rawSheets = core.getRegistry(root, META_SHEETS_REGISTRY) || [];
-            const sheets = Array.isArray(rawSheets)
-                ? rawSheets.slice()
-                : [];
-            if (sheets.length > 0) {
-                sheets.sort((a, b) => {
-                    const ao = typeof a.order === "number" ? a.order : 0;
-                    const bo = typeof b.order === "number" ? b.order : 0;
-                    return ao - bo;
-                });
-                const first = sheets[0];
-                if (first && first.SetID) {
-                    core.addMember(root, first.SetID, node);
-                }
-            }
+            (0, metaCoreOps_1.registerMetaNodeOnSheets)(core, root, node);
             const containmentsDone = [];
             const containsArg = args.contains;
             if (Array.isArray(containsArg) && containsArg.length > 0) {
@@ -622,7 +606,7 @@ exports.createMetaNode = {
                     }
                 }
             }
-            await (0, tools_1.commitCoreSession)(ctx.coreSession, "GMEBot: createMetaNode " + name);
+            await (0, toolRegistry_1.commitCoreSession)(ctx.coreSession, "GMEBot: createMetaNode " + name);
             return {
                 data: {
                     created: true,
@@ -636,7 +620,7 @@ exports.createMetaNode = {
             };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "createMetaNode", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "createMetaNode", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -712,7 +696,7 @@ exports.setMetaAttribute = {
                     },
                 };
             }
-            await (0, tools_1.commitCoreSession)(ctx.coreSession, "GMEBot: setMetaAttribute " + attributeName);
+            await (0, toolRegistry_1.commitCoreSession)(ctx.coreSession, "GMEBot: setMetaAttribute " + attributeName);
             return {
                 data: {
                     conceptPath: core.getPath(node),
@@ -722,7 +706,7 @@ exports.setMetaAttribute = {
             };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "setMetaAttribute", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "setMetaAttribute", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -764,11 +748,11 @@ exports.delMetaAttribute = {
             if (!conceptNode)
                 return { data: { error: "Concept not found at " + conceptPath } };
             core.delAttributeMeta(conceptNode, attributeName);
-            await (0, tools_1.commitCoreSession)(ctx.coreSession, "GMEBot: delMetaAttribute");
+            await (0, toolRegistry_1.commitCoreSession)(ctx.coreSession, "GMEBot: delMetaAttribute");
             return { data: { deleted: true, conceptPath: core.getPath(conceptNode), attributeName } };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "delMetaAttribute", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "delMetaAttribute", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -864,7 +848,7 @@ exports.setMetaContainment = {
                     },
                 };
             }
-            await (0, tools_1.commitCoreSession)(ctx.coreSession, "GMEBot: setMetaContainment");
+            await (0, toolRegistry_1.commitCoreSession)(ctx.coreSession, "GMEBot: setMetaContainment");
             return {
                 data: {
                     relation: "containment",
@@ -876,7 +860,7 @@ exports.setMetaContainment = {
             };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "setMetaContainment", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "setMetaContainment", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -922,11 +906,11 @@ exports.delMetaContainment = {
             if (!sourceNode)
                 return { data: { error: "Source concept not found at " + sourcePath } };
             core.delChildMeta(sourceNode, targetPath);
-            await (0, tools_1.commitCoreSession)(ctx.coreSession, "GMEBot: delMetaContainment");
+            await (0, toolRegistry_1.commitCoreSession)(ctx.coreSession, "GMEBot: delMetaContainment");
             return { data: { deleted: true, sourcePath, targetPath } };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "delMetaContainment", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "delMetaContainment", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -986,13 +970,13 @@ exports.setMetaPointer = {
                 return { data: { error: "Target concept not found at " + targetPath } };
             core.setPointerMetaLimits(conceptNode, pointerName, 1, 1);
             core.setPointerMetaTarget(conceptNode, pointerName, targetNode, 1, 1);
-            await (0, tools_1.commitCoreSession)(ctx.coreSession, "GMEBot: setMetaPointer");
+            await (0, toolRegistry_1.commitCoreSession)(ctx.coreSession, "GMEBot: setMetaPointer");
             return {
                 data: { conceptPath: core.getPath(conceptNode), pointerName, targetPath: core.getPath(targetNode) },
             };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "setMetaPointer", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "setMetaPointer", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -1036,13 +1020,13 @@ exports.delMetaPointer = {
                 return { data: { error: "Concept not found at " + conceptPath } };
             }
             core.delPointerMeta(conceptNode, pointerName);
-            await (0, tools_1.commitCoreSession)(ctx.coreSession, "GMEBot: delMetaPointer");
+            await (0, toolRegistry_1.commitCoreSession)(ctx.coreSession, "GMEBot: delMetaPointer");
             return {
                 data: { deleted: true, conceptPath: core.getPath(conceptNode), pointerName },
             };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "delMetaPointer", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "delMetaPointer", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -1084,11 +1068,11 @@ exports.delMetaSet = {
             if (!conceptNode)
                 return { data: { error: "Concept not found at " + conceptPath } };
             core.delPointerMeta(conceptNode, setName);
-            await (0, tools_1.commitCoreSession)(ctx.coreSession, "GMEBot: delMetaSet");
+            await (0, toolRegistry_1.commitCoreSession)(ctx.coreSession, "GMEBot: delMetaSet");
             return { data: { deleted: true, conceptPath: core.getPath(conceptNode), setName } };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "delMetaSet", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "delMetaSet", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -1155,13 +1139,13 @@ exports.setMetaSet = {
             const max = typeof args.max === "number" ? args.max : -1;
             core.setPointerMetaTarget(conceptNode, setName, targetNode, min, max);
             core.setPointerMetaLimits(conceptNode, setName, min, max);
-            await (0, tools_1.commitCoreSession)(ctx.coreSession, "GMEBot: setMetaSet");
+            await (0, toolRegistry_1.commitCoreSession)(ctx.coreSession, "GMEBot: setMetaSet");
             return {
                 data: { conceptPath: core.getPath(conceptNode), setName, targetPath: core.getPath(targetNode), min, max },
             };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "setMetaSet", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "setMetaSet", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -1215,13 +1199,13 @@ exports.setMetaMixin = {
             if (!metaNode)
                 return { data: { error: "Concept has no meta node at " + conceptPath } };
             core.addMember(metaNode, MIXINS_SET, mixinNode);
-            await (0, tools_1.commitCoreSession)(ctx.coreSession, "GMEBot: setMetaMixin");
+            await (0, toolRegistry_1.commitCoreSession)(ctx.coreSession, "GMEBot: setMetaMixin");
             return {
                 data: { conceptPath: core.getPath(conceptNode), mixinPath: core.getPath(mixinNode) },
             };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "setMetaMixin", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "setMetaMixin", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -1270,11 +1254,11 @@ exports.delMetaMixin = {
             if (!metaNode)
                 return { data: { error: "Concept has no meta node at " + conceptPath } };
             core.delMember(metaNode, MIXINS_SET, mixinPath);
-            await (0, tools_1.commitCoreSession)(ctx.coreSession, "GMEBot: delMetaMixin");
+            await (0, toolRegistry_1.commitCoreSession)(ctx.coreSession, "GMEBot: delMetaMixin");
             return { data: { deleted: true, conceptPath: core.getPath(conceptNode), mixinPath } };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "delMetaMixin", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "delMetaMixin", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -1378,7 +1362,7 @@ exports.checkMetaConsistency = {
             };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "checkMetaConsistency", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "checkMetaConsistency", args, e);
             return { data: { error: (e && e.message) || String(e), ok: false } };
         }
     },
@@ -1504,7 +1488,7 @@ exports.checkModelConsistency = {
             };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "checkModelConsistency", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "checkModelConsistency", args, e);
             return { data: { error: (e && e.message) || String(e), ok: false } };
         }
     },
@@ -1586,7 +1570,7 @@ exports.getMetaInfo = {
             };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "getMetaInfo", _args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "getMetaInfo", _args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -1645,13 +1629,13 @@ exports.setConceptPosition = {
                 return { data: { error: "Concept '" + conceptPath + "' is not on the active sheet. Add it to the sheet first or switch to the correct tab." } };
             }
             core.setMemberRegistry(root, sheetSetId, conceptPath, POSITION_REGISTRY_KEY, { x, y });
-            await (0, tools_1.commitCoreSession)(ctx.coreSession, "GMEBot: setConceptPosition");
+            await (0, toolRegistry_1.commitCoreSession)(ctx.coreSession, "GMEBot: setConceptPosition");
             return {
                 data: { set: true, conceptPath, sheetSetId, x, y },
             };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "setConceptPosition", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "setConceptPosition", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },
@@ -1724,7 +1708,7 @@ exports.setConceptLayout = {
             if (updated.length === 0) {
                 return { data: { error: errors.length > 0 ? errors.join("; ") : "No valid nodes to update." } };
             }
-            await (0, tools_1.commitCoreSession)(ctx.coreSession, "GMEBot: setConceptLayout");
+            await (0, toolRegistry_1.commitCoreSession)(ctx.coreSession, "GMEBot: setConceptLayout");
             return {
                 data: {
                     committed: true,
@@ -1735,7 +1719,7 @@ exports.setConceptLayout = {
             };
         }
         catch (e) {
-            (0, tools_1.logToolFailure)(ctx, "setConceptLayout", args, e);
+            (0, toolRegistry_1.logToolFailure)(ctx, "setConceptLayout", args, e);
             return { data: { error: (e && e.message) || String(e) } };
         }
     },

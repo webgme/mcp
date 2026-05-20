@@ -1,4 +1,5 @@
-import { Tool, commitCoreSession, logToolFailure } from "../tools";
+import type { Tool, ToolParameter } from "../toolRegistry";
+import { commitCoreSession, logToolFailure } from "../toolRegistry";
 import { buildMetaDescriptorFromCore, syncMetaDescriptorPatch } from "../metaDescriptor";
 
 function ensureCoreSession(ctx: any) {
@@ -13,17 +14,18 @@ export const patchMetaDescriptor: Tool = {
     definition: {
         name: "patchMetaDescriptor",
         description:
-            "Apply an RFC 6902 JSON Patch to the current metamodel MetaDescriptor and sync supported changes to WebGME. " +
-            "The full MetaDescriptor is already in chat context — do not call getMetaInfo first. " +
-            "Use /concepts/- to append a concept, /concepts/N/... for edits. " +
-            "New concepts are created on the server; removals and some relation edits may return warnings until fully implemented.",
+            "Apply JSON Patch to the metamodel descriptor (map-based, names only). " +
+            "Rules: domain-named main container (not Diagram); contains lists nodes and connection types; " +
+            "each link type needs concepts.{Name}={} and relationships.{Name}={from,to}. No attributes.name. " +
+            "Prefer one patch with all concepts, contains, and relationships. " +
+            "After success, tell the user what they can model in plain language — do not describe patch paths or descriptor layout.",
         parameters: {
             type: "object",
             properties: {
                 patch: {
                     type: "array",
                     description:
-                        "JSON Patch operations (add, remove, replace). Example: [{\"op\":\"add\",\"path\":\"/concepts/-\",\"value\":{\"name\":\"State\",\"extends\":\"FCO\"}}]",
+                        "JSON Patch operations. Example: [{\"op\":\"add\",\"path\":\"/concepts/State\",\"value\":{}},{\"op\":\"add\",\"path\":\"/relationships/Transition\",\"value\":{\"from\":\"State\",\"to\":\"State\"}}]",
                     items: {
                         type: "object",
                         properties: {
@@ -36,7 +38,7 @@ export const patchMetaDescriptor: Tool = {
                         },
                         required: ["op", "path"],
                     },
-                } as import("../tools").ToolParameter,
+                } as ToolParameter,
             },
             required: ["patch"],
         },
@@ -49,6 +51,12 @@ export const patchMetaDescriptor: Tool = {
             return { data: { error: "patch must be a non-empty array of operations." } };
         }
 
+        const patchLog = JSON.stringify(patch);
+        ctx.logger.info(
+            "patchMetaDescriptor " +
+                (patchLog.length > 48000 ? patchLog.slice(0, 48000) + "…" : patchLog)
+        );
+
         try {
             const before = buildMetaDescriptorFromCore(core, root);
             const result = await syncMetaDescriptorPatch(
@@ -58,17 +66,18 @@ export const patchMetaDescriptor: Tool = {
                 patch,
                 (message) => commitCoreSession(ctx.coreSession!, message)
             );
-            return {
-                data: {
-                    ok: true,
-                    applied: result.applied,
-                    warnings: result.warnings,
-                    metaDescriptor: result.metaDescriptor,
-                },
-            };
+            ctx.logger.info(
+                "patchMetaDescriptor done applied=" +
+                    result.applied.length +
+                    " warnings=" +
+                    result.warnings.length
+            );
+            const data: { ok: boolean; warnings?: string[]; error?: string } = { ok: true };
+            if (result.warnings.length) data.warnings = result.warnings;
+            return { data };
         } catch (e: any) {
             logToolFailure(ctx, "patchMetaDescriptor", args, e);
-            return { data: { error: (e && e.message) || String(e) } };
+            return { data: { ok: false, error: (e && e.message) || String(e) } };
         }
     },
 };

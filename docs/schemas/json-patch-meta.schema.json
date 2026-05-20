@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://webgme.org/schemas/json-patch-meta/v1.json",
   "title": "JSONPatchRequest",
-  "description": "RFC 6902 JSON Patch on a MetaDescriptor. Applied to the descriptor document; server translates to WebGME core. With concepts as an array, use /concepts/- to append, /concepts/N/... for index-based edits, or replace the full concepts array for small metamodels.",
+  "description": "RFC 6902 JSON Patch on a MetaDescriptor. concepts and relationships are objects — patch by name, e.g. /concepts/State, /concepts/StateMachine/contains/Transition, /relationships/Transition.",
   "type": "array",
   "minItems": 1,
   "items": {
@@ -16,13 +16,11 @@
       },
       "path": {
         "type": "string",
-        "description": "JSON Pointer. Examples: /concepts/-, /concepts/2/pointers/src, /concepts/1/contains/-"
+        "description": "JSON Pointer. Examples: /concepts/State, /concepts/StateMachine/contains/State, /relationships/Transition"
       },
-      "from": {
-        "type": "string"
-      },
+      "from": { "type": "string" },
       "value": {
-        "description": "Fragment per meta-descriptor.schema.json (e.g. a full concept or a string target for a pointer)."
+        "description": "Fragment per meta-descriptor.schema.json."
       }
     },
     "allOf": [
@@ -38,25 +36,17 @@
   },
   "examples": [
     [
+      { "op": "add", "path": "/concepts/State", "value": {} },
+      { "op": "add", "path": "/concepts/Transition", "value": {} },
       {
         "op": "add",
-        "path": "/concepts/-",
-        "value": {
-          "name": "Transition",
-          "extends": "FCO",
-          "pointers": { "src": ["State:1"], "dst": ["State:1"] },
-          "attributes": { "name": "string" }
-        }
+        "path": "/concepts/StateMachine",
+        "value": { "contains": { "State": "*", "Transition": "*" } }
       },
       {
         "op": "add",
-        "path": "/concepts/1/contains/-",
-        "value": "Transition*"
-      },
-      {
-        "op": "add",
-        "path": "/concepts/1/pointers/activeState",
-        "value": "State:0..1"
+        "path": "/relationships/Transition",
+        "value": { "from": "State", "to": "State" }
       }
     ]
   ]

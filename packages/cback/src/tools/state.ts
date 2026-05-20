@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { Tool } from "../tools";
+import type { Tool } from "../toolRegistry";
 
 /**
  * State tools: client-side state changes (selection, visualizer).

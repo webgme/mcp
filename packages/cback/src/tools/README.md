@@ -104,7 +104,7 @@ These tools change only what the user sees in the browser (selection and visuali
 
 ## Tool registration
 
-- All tools are combined in [packages/cback/src/tools.ts](../tools.ts). **Context-driven selection:** when the client sends `context.activeVisualizerId`, the LLM receives only a subset: project + branch + state tools always; if the visualizer is the Meta Editor (e.g. `METAAspect`) then meta tools are added; otherwise node tools are added. This reduces token use. With no context, all tools are sent. Handlers are in a full map so any tool call can still be executed.
+- All tools are combined in [packages/cback/src/toolRegistry.ts](../toolRegistry.ts). **Context-driven selection:** when the client sends `context.activeVisualizerId`, the LLM receives only a subset: project + branch + state tools always; if the visualizer is the Meta Editor (e.g. `METAAspect`) then meta tools are added; otherwise node tools are added. This reduces token use. With no context, all tools are sent. Handlers are in a full map so any tool call can still be executed.
 - State tools are built with `gmeConfig` so visualizer enum comes from [Visualizers.json](../../../src/visualizers/Visualizers.json) and WebGME descriptors.
 - Definitions are sent to the LLM via `getToolDefinitionsForLLM(gmeConfig, context)`; handlers are used in the cback router ([packages/cback/src/cback.ts](../cback.ts)).
 

@@ -1,4 +1,5 @@
-import { Tool, ToolContext, commitCoreSession, NEED_CLIENT_DATA_KEYS, logToolFailure } from "../tools";
+import type { Tool, ToolContext, ToolParameter } from "../toolRegistry";
+import { commitCoreSession, NEED_CLIENT_DATA_KEYS, logToolFailure } from "../toolRegistry";
 
 const DEFAULT_BASE_TYPE = "FCO";
 const PATH_SEP = "/";
@@ -1275,7 +1276,7 @@ export const bulkSet: Tool = {
                         },
                         required: ["path"],
                     },
-                } as import("../tools").ToolParameter,
+                } as ToolParameter,
             },
             required: ["nodes"],
         },

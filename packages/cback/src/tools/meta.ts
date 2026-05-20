@@ -1,4 +1,6 @@
-import { Tool, commitCoreSession, logToolFailure } from "../tools";
+import type { Tool, ToolParameter } from "../toolRegistry";
+import { commitCoreSession, logToolFailure } from "../toolRegistry";
+import { registerMetaNodeOnSheets } from "../metaCoreOps";
 import { getDiagramLayout } from "./node";
 
 const META_SHEETS_REGISTRY = "MetaSheets";
@@ -461,7 +463,7 @@ export const createMetaNode: Tool = {
                         },
                         required: ["targetPath"],
                     },
-                } as import("../tools").ToolParameter,
+                } as ToolParameter,
                 pointers: {
                     type: "array",
                     description:
@@ -474,7 +476,7 @@ export const createMetaNode: Tool = {
                         },
                         required: ["pointerName", "targetPath"],
                     },
-                } as import("../tools").ToolParameter,
+                } as ToolParameter,
                 sets: {
                     type: "array",
                     description:
@@ -489,7 +491,7 @@ export const createMetaNode: Tool = {
                         },
                         required: ["setName", "targetPath"],
                     },
-                } as import("../tools").ToolParameter,
+                } as ToolParameter,
             },
             required: ["name"],
         },
@@ -568,27 +570,7 @@ export const createMetaNode: Tool = {
             const nodePath = core.getPath(node);
 
             core.setAttribute(node, "name", name);
-
-            // Add to global MetaAspectSet.
-            core.addMember(root, META_ASPECT_SET_NAME, node);
-
-            // If there is at least one meta sheet, add to the first one (by order).
-            const rawSheets =
-                core.getRegistry(root, META_SHEETS_REGISTRY) || [];
-            const sheets: any[] = Array.isArray(rawSheets)
-                ? rawSheets.slice()
-                : [];
-            if (sheets.length > 0) {
-                sheets.sort((a, b) => {
-                    const ao = typeof a.order === "number" ? a.order : 0;
-                    const bo = typeof b.order === "number" ? b.order : 0;
-                    return ao - bo;
-                });
-                const first = sheets[0];
-                if (first && first.SetID) {
-                    core.addMember(root, first.SetID, node);
-                }
-            }
+            registerMetaNodeOnSheets(core, root, node);
 
             const containmentsDone: Array<{ targetPath: string; min?: number; max?: number }> = [];
             const containsArg = args.contains;
@@ -1776,7 +1758,7 @@ export const setConceptLayout: Tool = {
                         },
                         required: ["path", "x", "y"],
                     },
-                } as import("../tools").ToolParameter,
+                } as ToolParameter,
             },
             required: ["nodes"],
         },

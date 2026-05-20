@@ -1,4 +1,5 @@
-import { Tool, logToolFailure } from "../tools";
+import type { Tool } from "../toolRegistry";
+import { logToolFailure } from "../toolRegistry";
 
 const MASTER_BRANCH = "master";
 

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://webgme.org/schemas/meta-descriptor/v1.json",
   "title": "MetaDescriptor",
-  "description": "Compact metamodel summary for GMEBot. concepts: types, containment (targetRef + cardinality), pointers (0..1, type names only), sets, attributes. relationships: separate block for connection concepts (src/dst), e.g. Transition: State -> State. Server maps relationships to WebGME pointer meta on the named concept.",
+  "description": "Compact metamodel for GMEBot. One **main container** concept (domain name, e.g. StateMachine — not Diagram) has contains listing every instantiable type including connection concepts. Each link type is a concept ({} = FCO only) plus relationships.{Name} = { from, to }. Cardinality only in contains values.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "concepts"],
@@ -12,21 +12,33 @@
       "const": 1
     },
     "concepts": {
-      "type": "array",
-      "description": "META types (structure, attributes, containment, ordinary pointers, sets).",
-      "items": { "$ref": "#/$defs/concept" }
+      "type": "object",
+      "description": "META types keyed by concept name (e.g. concepts.State). Names must be plain identifiers — no *, :, or cardinality suffixes.",
+      "propertyNames": { "$ref": "#/$defs/conceptName" },
+      "additionalProperties": { "$ref": "#/$defs/conceptBody" }
     },
     "relationships": {
-      "type": "array",
-      "description": "Connection/link types: which concept connects which types (maps to src/dst pointers on that concept). Listed separately from concepts[].pointers.",
-      "items": { "$ref": "#/$defs/relationshipDef" }
+      "type": "object",
+      "description": "Link/edge types keyed by connection concept name. Each value sets src/dst on that concept in WebGME.",
+      "propertyNames": { "$ref": "#/$defs/conceptName" },
+      "additionalProperties": { "$ref": "#/$defs/relationshipBody" }
     }
   },
   "$defs": {
+    "conceptName": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+      "description": "Concept name (identifier). Not FCO, not State:* or paths."
+    },
+    "cardinality": {
+      "type": "string",
+      "description": "Containment cardinality for the child type.",
+      "enum": ["*", "+", "?", "1", "0..1"]
+    },
     "attributeType": {
       "type": "string",
-      "enum": ["string", "float", "enum", "bool", "asset", "integer"],
-      "description": "WebGME attribute meta type."
+      "enum": ["string", "float", "enum", "bool", "asset", "integer"]
     },
     "attributeMeta": {
       "type": "object",
@@ -37,16 +49,11 @@
         "hidden": { "type": "boolean" },
         "readOnly": { "type": "boolean" },
         "password": { "type": "boolean" },
-        "multiline": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Multiline editor; value is language/subtype (e.g. javascript, java)."
-        },
+        "multiline": { "type": "string", "minLength": 1 },
         "values": {
           "type": "array",
           "items": { "type": "string" },
-          "minItems": 1,
-          "description": "Allowed values when type is enum."
+          "minItems": 1
         },
         "min": { "type": "number" },
         "max": { "type": "number" },
@@ -68,36 +75,18 @@
       ]
     },
     "attributeDef": {
-      "description": "Shorthand: \"string\". Full form: { \"type\": \"enum\", \"values\": [...], ... }.",
       "oneOf": [
         { "$ref": "#/$defs/attributeType" },
         { "$ref": "#/$defs/attributeMeta" }
       ]
     },
-    "targetRef": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Contained/set member type with cardinality suffix (* + ? :n :min..max). Examples: Transition*, State:0..1."
-    },
-    "targetRefOrList": {
-      "description": "One targetRef or a union of contained/set member types.",
-      "oneOf": [
-        { "$ref": "#/$defs/targetRef" },
-        {
-          "type": "array",
-          "minItems": 1,
-          "items": { "$ref": "#/$defs/targetRef" }
-        }
-      ]
-    },
     "typeRef": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^[^/]+$",
-      "description": "Concept name only (no cardinality). Used for pointers and relationship ends (always 0..1 per pointer)."
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+      "description": "Target concept name (no cardinality)."
     },
     "typeRefOrList": {
-      "description": "One allowed concept type, or several alternatives, for a pointer or relationship end.",
       "oneOf": [
         { "$ref": "#/$defs/typeRef" },
         {
@@ -107,73 +96,52 @@
         }
       ]
     },
-    "relationshipMeta": {
+    "containsMap": {
+      "type": "object",
+      "description": "On the **main container** only: child concept name → cardinality. List node types AND connection types (e.g. State, Transition) so instances can be created.",
+      "propertyNames": { "$ref": "#/$defs/conceptName" },
+      "additionalProperties": { "$ref": "#/$defs/cardinality" }
+    },
+    "relationshipBody": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "from", "to"],
+      "required": ["from", "to"],
+      "description": "Wires src/dst on the connection concept (key must match concepts.{same name}, usually {}).",
       "properties": {
-        "name": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Connection concept (must exist in concepts[], typically extends FCO)."
-        },
-        "from": {
-          "$ref": "#/$defs/typeRefOrList",
-          "description": "Valid type at src end (0..1)."
-        },
-        "to": {
-          "$ref": "#/$defs/typeRefOrList",
-          "description": "Valid type at dst end (0..1)."
-        }
+        "from": { "$ref": "#/$defs/typeRefOrList" },
+        "to": { "$ref": "#/$defs/typeRefOrList" }
       }
     },
-    "relationshipLine": {
-      "type": "string",
-      "minLength": 1,
-      "pattern": "^[^:]+:[^>]+->.+$",
-      "description": "Readable line: \"ConceptName: FromType -> ToType\" (e.g. \"Transition: State -> State\"). From/To are concept names; union not supported in line form—use object form."
-    },
-    "relationshipDef": {
-      "description": "One connection type. Object form or line form (like attribute shorthand).",
-      "oneOf": [
-        { "$ref": "#/$defs/relationshipMeta" },
-        { "$ref": "#/$defs/relationshipLine" }
-      ]
-    },
-    "concept": {
+    "conceptBody": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "extends"],
+      "description": "Empty {} = concept extending FCO only (typical for State, Transition). Omit extends for FCO.",
       "properties": {
-        "name": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Concept name (e.g. State, Transition, FCO)."
-        },
         "extends": {
           "type": "string",
-          "minLength": 1,
-          "description": "Base concept name (usually FCO for domain types)."
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "description": "Base concept name. Omit when extending FCO."
         },
-        "contains": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/targetRef" },
-          "description": "Valid child types (containment), each with cardinality suffix."
-        },
+        "contains": { "$ref": "#/$defs/containsMap" },
         "pointers": {
           "type": "object",
+          "propertyNames": { "type": "string", "minLength": 1 },
           "additionalProperties": { "$ref": "#/$defs/typeRefOrList" },
-          "description": "Non-connection pointers (not src/dst—those go in relationships). Each is 0..1; value is concept name or list of allowed types."
+          "description": "Non-connection pointers (not src/dst — use relationships)."
         },
         "sets": {
           "type": "object",
-          "additionalProperties": { "$ref": "#/$defs/targetRefOrList" },
-          "description": "Set name → member type(s) with cardinality (targetRef)."
+          "propertyNames": { "type": "string", "minLength": 1 },
+          "additionalProperties": { "$ref": "#/$defs/containsMap" },
+          "description": "Set name → member type(s) with cardinality."
         },
         "attributes": {
           "type": "object",
-          "additionalProperties": { "$ref": "#/$defs/attributeDef" },
-          "description": "Attributes defined on this concept only. Omit attributes inherited from extends (e.g. name from FCO); include a name only when this concept overrides the inherited meta rule."
+          "description": "Attributes defined on this concept only. Do not include name — it is inherited from FCO.",
+          "propertyNames": {
+            "not": { "enum": ["name"] }
+          },
+          "additionalProperties": { "$ref": "#/$defs/attributeDef" }
         }
       }
     }
@@ -181,38 +149,21 @@
   "examples": [
     {
       "version": 1,
-      "concepts": [
-        {
-          "name": "FCO",
-          "extends": "FCO",
-          "attributes": { "name": "string" }
+      "concepts": {
+        "StateMachine": {
+          "contains": { "State": "*", "InitialState": "1", "Transition": "*" }
         },
-        {
-          "name": "State",
-          "extends": "FCO",
-          "contains": ["Transition*"],
-          "pointers": { "activeState": "State" },
+        "State": {
           "attributes": {
             "priority": { "type": "integer", "min": 0, "max": 10, "default": 0 }
           }
         },
-        {
-          "name": "Transition",
-          "extends": "FCO"
-        },
-        {
-          "name": "Connector",
-          "extends": "FCO"
-        }
-      ],
-      "relationships": [
-        "Transition: State -> State",
-        {
-          "name": "Connector",
-          "from": ["State", "Transition"],
-          "to": "FCO"
-        }
-      ]
+        "InitialState": {},
+        "Transition": {}
+      },
+      "relationships": {
+        "Transition": { "from": "State", "to": "State" }
+      }
     }
   ]
 }

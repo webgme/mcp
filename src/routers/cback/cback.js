@@ -5,19 +5,28 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const llmAdapter_1 = require("./llmAdapter");
-const tools_1 = require("./tools");
+const toolRegistry_1 = require("./toolRegistry");
 const contextBlocks_1 = require("./contextBlocks");
 const router = express_1.default.Router();
 const SYSTEM_PROMPT_BASE = "You are GMEBot, an assistant embedded in a WebGME modeling environment. " +
     "Use the API tool-calling mechanism when a tool is available — each action must be a named tool invocation, not free-form JSON pretending to be a tool. " +
-    "When referring to concepts or nodes, use Name (path), e.g. State (/3). " +
-    "The client sends modelingMode (metamodel | domain), project/selection context, a MetaDescriptor snapshot, and an object-list (existing / new / deleted). " +
+    "In metamodel mode, concepts are identified by **name** only — never use paths, guids, or node ids in patches or when referring to META types. " +
+    "The client sends modelingMode, a MetaDescriptor snapshot, and a concept registry (existing / new / deleted names). " +
     "Do not ask to fetch the metamodel first — it is already in context. " +
     "In metamodel mode the only tool is patchMetaDescriptor: apply RFC 6902 JSON Patch to the MetaDescriptor (see docs/schemas/meta-descriptor.schema.json). " +
-    "Prefer small, focused patches. For a new concept use {\"op\":\"add\",\"path\":\"/concepts/-\",\"value\":{\"name\":\"...\",\"extends\":\"FCO\",...}}. " +
-    "Connection types belong in relationships (e.g. \"Transition: State -> State\") or concept pointers src/dst. " +
+    "MetaDescriptor uses **objects keyed by name**, not arrays: patch /concepts/State, /concepts/StateMachine/contains/State, /relationships/Transition. " +
+    "Never put cardinality in concept names (wrong: concepts.State:*; right: concepts.State and StateMachine.contains.State = \"*\"). " +
+    "Never add attributes.name — the name attribute is inherited from FCO. " +
+    "Metamodel structure: (1) **main container** named for the domain (StateMachine, not Diagram) — contains must list **both** node types and **connection** types (Transition, etc.) so they can be instantiated; " +
+    "(2) each link type as concepts.{Name} = {} (empty = FCO) plus relationships.{Name} = { from, to }; " +
+    "(3) other node concepts as needed. Never use Diagram, ConnectionName, or Connector as concept names. " +
+    "Prefer one patch with all concepts, main container contains, and relationships. " +
+    "Omit extends when a concept extends FCO (use \"FCO\" only in contains/pointers/relationship ends when needed). " +
+    "**User-facing replies (metamodel):** After patchMetaDescriptor, summarize what the user can now model — type names, what goes inside the main container, how links work — in everyday modeling language. " +
+    "Do not walk the user through MetaDescriptor, JSON Patch, contains maps, relationships blocks, FCO, cardinality, or tool results unless they ask for technical detail. " +
+    "Never assume the user knows the descriptor format; the format is your edit surface only. " +
     "In domain mode tools are hidden for now — explain changes clearly from context. " +
-    "If a tool returns an error, report it. In WebGME, FCO means First Class Object.";
+    "If a tool returns an error, describe the problem in plain language; use technical detail only when helpful.";
 const MAX_TOOL_ROUNDS = 5; // default; override with CBACK_MAX_TOOL_ROUNDS env
 /** Default timeout for a single LLM request (ms). 0 = no timeout. Override with CBACK_LLM_REQUEST_TIMEOUT_MS. */
 const DEFAULT_LLM_REQUEST_TIMEOUT_MS = 120000; // 2 minutes
@@ -34,18 +43,49 @@ function withTimeout(promise, ms, message) {
 const MAX_HISTORY_MESSAGES = 40;
 /** Cap size of tool result content in history (chars) to limit tokens. */
 const MAX_TOOL_RESULT_CHARS = 2500;
-/** Build a stable fingerprint of tool_calls to detect repeated identical rounds (loop guard). */
+/** Stable fingerprint of an LLM tool-call round (order preserved — do not sort). */
 function getToolCallsFingerprint(toolCalls) {
     if (!toolCalls || toolCalls.length === 0)
         return "";
-    const parts = toolCalls.map((c) => {
-        const name = (c.function && c.function.name) ? String(c.function.name) : "";
+    return toolCalls
+        .map((c) => {
+        const name = c.function && c.function.name ? String(c.function.name) : "";
         const args = c.function && c.function.arguments;
-        const argsStr = typeof args === "string" ? args : (args != null ? JSON.stringify(args) : "");
+        const argsStr = typeof args === "string" ? args : args != null ? JSON.stringify(args) : "";
         return name + ":" + argsStr.slice(0, 400);
-    });
-    parts.sort();
-    return parts.join(" | ");
+    })
+        .join(" | ");
+}
+/** Compact tool message for chat history (full meta descriptor lives in refreshed system context). */
+function toolResultContentForHistory(toolName, toolResult) {
+    if (toolName === "patchMetaDescriptor") {
+        if (toolResult && (toolResult.error || toolResult.ok === false)) {
+            return JSON.stringify({ ok: false, error: toolResult.error || "patch failed" });
+        }
+        const out = { ok: true };
+        if (Array.isArray(toolResult === null || toolResult === void 0 ? void 0 : toolResult.warnings) && toolResult.warnings.length) {
+            out.warnings = toolResult.warnings;
+        }
+        return JSON.stringify(out);
+    }
+    const raw = JSON.stringify(toolResult);
+    return raw.length <= MAX_TOOL_RESULT_CHARS
+        ? raw
+        : raw.substring(0, MAX_TOOL_RESULT_CHARS) + " [truncated]";
+}
+function toolRoundMadeProgress(toolResults) {
+    for (const tr of toolResults) {
+        try {
+            const data = JSON.parse(tr.content);
+            if (data && data.ok === true) {
+                return true;
+            }
+        }
+        catch {
+            /* ignore */
+        }
+    }
+    return false;
 }
 /** Match only when "project" is explicitly mentioned — avoid matching "switch to the diagram" etc. */
 const SWITCH_PROJECT_PATTERN = /\b(switch|open|go to|change to|load)\s+(?:to\s+)?project\b|(?:switch|open)\s+project\b|\bswitchProject\b/i;
@@ -106,28 +146,13 @@ async function ensureProjectListInContext(history, listProjectsHandler, toolCtx)
     });
 }
 const sessions = new Map();
-/** Logging: info = event + main context (e.g. tool name, node path); debug = full parameters/payloads. */
-const TOOL_CONTEXT_KEYS = [
-    "nodePath", "nodeId", "containerPath", "projectId", "path", "name", "conceptPath",
-    "sourcePath", "targetPath", "message", "setId", "branchName", "activeNodeId", "container",
-];
-const MAX_CONTEXT_VAL = 80;
-function toolArgsContext(args) {
-    const parts = [];
-    for (const k of TOOL_CONTEXT_KEYS) {
-        const v = args[k];
-        if (v === undefined || v === null)
-            continue;
-        const s = typeof v === "string" ? v : JSON.stringify(v);
-        parts.push(k + "=" + (s.length > MAX_CONTEXT_VAL ? s.slice(0, MAX_CONTEXT_VAL) + "…" : s));
-    }
-    return parts.length ? parts.join(" ") : "";
-}
+/** Max chars for tool_call / tool_response bodies at info level (server log). */
+const MAX_TOOL_LOG_CHARS = 48000;
 /** Final /chat JSON body: status tells the client when empty reply is OK vs an error. */
 function buildChatResponse(opts) {
     const reply = opts.content != null ? String(opts.content) : "";
     const trimmed = reply.trim();
-    const hadTools = opts.toolActivity.length > 0;
+    const hadTools = !!opts.toolsUsed;
     const hadCommands = !!(opts.commands && opts.commands.length > 0);
     const base = {};
     if (opts.commands && opts.commands.length > 0) {
@@ -137,7 +162,7 @@ function buildChatResponse(opts) {
         base.usage = opts.usage;
     }
     if (hadTools) {
-        base.toolActivity = opts.toolActivity;
+        base.toolsUsed = true;
     }
     if (trimmed) {
         return { status: "complete", reply, ...base };
@@ -178,9 +203,24 @@ function logLlmRequestDebug(log, round, historyLength) {
     log.debug("llm_request round=" + round + " historyMessages=" + historyLength);
 }
 function logLlmResponse(log, round, msg) {
+    var _a, _b;
     if (msg.tool_calls && msg.tool_calls.length > 0) {
         const names = msg.tool_calls.map((c) => { var _a; return ((_a = c.function) === null || _a === void 0 ? void 0 : _a.name) || "?"; }).join(",");
         log.info("llm_response round=" + round + " tool_calls=" + msg.tool_calls.length + " " + names);
+        for (const c of msg.tool_calls) {
+            const raw = {
+                id: c.id,
+                name: (_a = c.function) === null || _a === void 0 ? void 0 : _a.name,
+                arguments: (_b = c.function) === null || _b === void 0 ? void 0 : _b.arguments,
+            };
+            const line = JSON.stringify(raw);
+            log.info("llm_tool_call round=" +
+                round +
+                " " +
+                (line.length > MAX_TOOL_LOG_CHARS
+                    ? line.slice(0, MAX_TOOL_LOG_CHARS) + "…"
+                    : line));
+        }
     }
     else {
         const len = typeof msg.content === "string" ? msg.content.length : 0;
@@ -202,15 +242,23 @@ function logLlmResponseDebug(log, round, msg) {
         log.debug("llm_response round=" + round + " content: " + (msg.content || "").slice(0, 500));
     }
 }
-function logToolCall(log, name, args) {
-    log.info("tool_call " + name + " " + toolArgsContext(args));
+function logToolCall(log, name, args, meta) {
+    const payload = { tool: name, arguments: args };
+    if (meta === null || meta === void 0 ? void 0 : meta.toolCallId)
+        payload.id = meta.toolCallId;
+    const line = JSON.stringify(payload);
+    log.info("tool_call " +
+        (line.length > MAX_TOOL_LOG_CHARS ? line.slice(0, MAX_TOOL_LOG_CHARS) + "…" : line));
 }
 function logToolCallDebug(log, name, args, ctx) {
-    log.debug("tool_call " + name + " args=" + JSON.stringify(args) + " hasCoreSession=" + !!ctx.coreSession +
-        " context=" + JSON.stringify(ctx.context));
+    log.debug("tool_call " +
+        name +
+        " hasCoreSession=" +
+        !!ctx.coreSession +
+        " context=" +
+        JSON.stringify(ctx.context));
 }
 function logToolResponse(log, name, result, err) {
-    var _a, _b;
     if (err) {
         log.info("tool_response " + name + " error " + (err.message || String(err)).slice(0, 120));
         return;
@@ -220,13 +268,12 @@ function logToolResponse(log, name, result, err) {
         log.info("tool_response " + name + " error " + String(error).slice(0, 120));
         return;
     }
-    const path = result && ((_b = (_a = result.path) !== null && _a !== void 0 ? _a : result.nodePath) !== null && _b !== void 0 ? _b : result.createdPath);
-    const extra = path != null ? " path=" + String(path).slice(0, MAX_CONTEXT_VAL) : "";
-    log.info("tool_response " + name + " ok" + extra);
+    const line = JSON.stringify({ tool: name, result });
+    log.info("tool_response " +
+        (line.length > MAX_TOOL_LOG_CHARS ? line.slice(0, MAX_TOOL_LOG_CHARS) + "…" : line));
 }
 function logToolResponseDebug(log, name, result) {
-    const str = JSON.stringify(result);
-    log.debug("tool_response " + name + " " + (str.length > 2000 ? str.slice(0, 2000) + "…" : str));
+    log.debug("tool_response " + name + " (duplicate of info log)");
 }
 function getSession(userId) {
     if (!sessions.has(userId)) {
@@ -335,8 +382,8 @@ function initialize(middlewareOpts) {
         logger.info("cback LLM: openai-compatible (baseUrl=" + llmAdapterConfig.baseUrl + ", model=" + llmAdapterConfig.model + ")");
     }
     /** Tool definitions for GET /config (no request context at init). Chat uses per-request toolDefs from context. */
-    const defaultToolDefs = (0, tools_1.getToolDefinitionsForLLM)(middlewareOpts.gmeConfig, undefined);
-    const toolMap = (0, tools_1.getToolMap)(middlewareOpts.gmeConfig);
+    const defaultToolDefs = (0, toolRegistry_1.getToolDefinitionsForLLM)(middlewareOpts.gmeConfig, undefined);
+    const toolMap = (0, toolRegistry_1.getToolMap)(middlewareOpts.gmeConfig);
     logger.debug("initializing ...");
     router.use("*", function (_req, res, next) {
         res.setHeader("X-WebGME-Media-Type", "webgme.v1");
@@ -392,7 +439,7 @@ function initialize(middlewareOpts) {
         }
         refreshSystemMessage(history, toolCtxEarly);
         const turnCtx = (0, contextBlocks_1.formatTurnContextLine)(toolCtxEarly);
-        const mode = (0, tools_1.resolveModelingMode)(toolCtxEarly.context);
+        const mode = (0, toolRegistry_1.resolveModelingMode)(toolCtxEarly.context);
         const userContent = turnCtx
             ? userMessage + "\n[Turn context: " + turnCtx + ", modelingMode=" + mode + "]"
             : userMessage + "\n[Turn context: modelingMode=" + mode + "]";
@@ -410,13 +457,14 @@ function initialize(middlewareOpts) {
         }
         const toolCtx = toolCtxEarly;
         /** Tool definitions for this request: metamodel → patchMetaDescriptor only; domain → none. */
-        const toolDefs = (0, tools_1.getToolDefinitionsForLLM)(middlewareOpts.gmeConfig, toolCtx.context);
+        const toolDefs = (0, toolRegistry_1.getToolDefinitionsForLLM)(middlewareOpts.gmeConfig, toolCtx.context);
         try {
             trimHistory(history, MAX_HISTORY_MESSAGES);
             let rounds = 0;
             let lastRoundFingerprint = null;
+            let identicalToolRoundStreak = 0;
             const commands = [];
-            const toolActivity = [];
+            let toolsUsedThisChat = false;
             while (rounds < maxToolRounds) {
                 rounds++;
                 logLlmRequest(logger, rounds);
@@ -446,7 +494,7 @@ function initialize(middlewareOpts) {
                     logLlmResponseDebug(logger, rounds, msg);
                     res.json(buildChatResponse({
                         content: msg.content,
-                        toolActivity,
+                        toolsUsed: toolsUsedThisChat,
                         commands,
                         usage: result.usage,
                     }));
@@ -454,17 +502,30 @@ function initialize(middlewareOpts) {
                 }
                 const roundFingerprint = getToolCallsFingerprint(msg.tool_calls);
                 if (roundFingerprint && roundFingerprint === lastRoundFingerprint) {
+                    identicalToolRoundStreak++;
+                }
+                else {
+                    identicalToolRoundStreak = 0;
+                }
+                lastRoundFingerprint = roundFingerprint;
+                if (identicalToolRoundStreak >= 2) {
                     history.pop();
-                    logger.warn("chat loop_guard userId=" + userId + " round=" + rounds + " repeated tool calls");
+                    logger.warn("chat loop_guard userId=" +
+                        userId +
+                        " round=" +
+                        rounds +
+                        " streak=" +
+                        identicalToolRoundStreak +
+                        " fingerprint=" +
+                        roundFingerprint.slice(0, 120));
                     res.json({
                         status: "error",
-                        reply: "Stopped: the same tool calls were repeated without progress. Please try rephrasing your request or a different approach.",
+                        reply: "Stopped: the model repeated the same tool calls several times without progress. The metamodel may already be updated — try asking a follow-up question.",
                         loopGuard: true,
-                        ...(toolActivity.length > 0 ? { toolActivity } : {}),
+                        toolsUsed: toolsUsedThisChat,
                     });
                     return;
                 }
-                lastRoundFingerprint = roundFingerprint;
                 const toolResultsThisRound = [];
                 let needClientDataKey = null;
                 for (const call of msg.tool_calls) {
@@ -483,17 +544,12 @@ function initialize(middlewareOpts) {
                     else if (rawArgs && typeof rawArgs === "object") {
                         args = rawArgs;
                     }
-                    logToolCall(logger, call.function.name, args);
+                    logToolCall(logger, call.function.name, args, { toolCallId: call.id });
                     logToolCallDebug(logger, call.function.name, args, toolCtx);
-                    const argsSummary = toolArgsContext(args);
-                    toolActivity.push({
-                        name: call.function.name,
-                        ...(argsSummary ? { argsSummary } : {}),
-                    });
                     const handler = toolMap.get(call.function.name);
                     let toolResult;
-                    if (!(0, tools_1.isToolEnabled)(call.function.name, toolCtx.context)) {
-                        const mode = (0, tools_1.resolveModelingMode)(toolCtx.context);
+                    if (!(0, toolRegistry_1.isToolEnabled)(call.function.name, toolCtx.context)) {
+                        const mode = (0, toolRegistry_1.resolveModelingMode)(toolCtx.context);
                         toolResult = {
                             error: "Tool '" +
                                 call.function.name +
@@ -507,11 +563,12 @@ function initialize(middlewareOpts) {
                         try {
                             const handlerResult = await handler(args, toolCtx);
                             toolResult = handlerResult.data;
+                            toolsUsedThisChat = true;
                             if (handlerResult.commands) {
                                 commands.push(...handlerResult.commands);
                             }
                             if (toolResult && typeof toolResult.needClientData === "string" &&
-                                toolResult.needClientData === tools_1.NEED_CLIENT_DATA_KEYS.diagramLayout) {
+                                toolResult.needClientData === toolRegistry_1.NEED_CLIENT_DATA_KEYS.diagramLayout) {
                                 needClientDataKey = toolResult.needClientData;
                             }
                             logToolResponse(logger, call.function.name, toolResult);
@@ -528,11 +585,10 @@ function initialize(middlewareOpts) {
                         logToolResponse(logger, call.function.name, { error: "Unknown tool" });
                         toolResult = { error: `Unknown tool: ${call.function.name}` };
                     }
-                    const contentStr = (() => {
-                        const raw = JSON.stringify(toolResult);
-                        return raw.length <= MAX_TOOL_RESULT_CHARS ? raw : raw.substring(0, MAX_TOOL_RESULT_CHARS) + " [truncated]";
-                    })();
-                    toolResultsThisRound.push({ content: contentStr, tool_call_id: call.id });
+                    toolResultsThisRound.push({
+                        content: toolResultContentForHistory(call.function.name, toolResult),
+                        tool_call_id: call.id,
+                    });
                 }
                 if (needClientDataKey) {
                     history.pop();
@@ -541,7 +597,7 @@ function initialize(middlewareOpts) {
                         reply: "",
                         continuation: true,
                         requestClientData: { key: needClientDataKey },
-                        ...(toolActivity.length > 0 ? { toolActivity } : {}),
+                        toolsUsed: toolsUsedThisChat,
                     });
                     return;
                 }
@@ -552,12 +608,17 @@ function initialize(middlewareOpts) {
                         tool_call_id: tr.tool_call_id,
                     });
                 }
+                if (toolRoundMadeProgress(toolResultsThisRound)) {
+                    identicalToolRoundStreak = 0;
+                    lastRoundFingerprint = null;
+                }
+                refreshSystemMessage(history, toolCtx);
             }
             logger.warn("chat max_rounds userId=" + userId + " rounds=" + maxToolRounds);
             res.json({
                 status: "error",
                 reply: "Reached maximum tool call rounds without a final answer.",
-                ...(toolActivity.length > 0 ? { toolActivity } : {}),
+                toolsUsed: toolsUsedThisChat,
             });
         }
         catch (err) {
@@ -588,7 +649,7 @@ function initialize(middlewareOpts) {
                 res.status(400).json({ error: "Missing or invalid toolName" });
                 return;
             }
-            const toolMap = (0, tools_1.getToolMap)(middlewareOpts.gmeConfig);
+            const toolMap = (0, toolRegistry_1.getToolMap)(middlewareOpts.gmeConfig);
             const handler = toolMap.get(toolName);
             if (!handler) {
                 res.status(400).json({ error: "Unknown tool: " + toolName });
