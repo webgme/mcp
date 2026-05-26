@@ -126,15 +126,22 @@ export function resolveLlmFromEnv(): ResolvedLlmAdapter {
 
 const DEFAULT_ANTHROPIC_VERSION = "2023-06-01";
 
+/** Optional flags for the HTTP request (OpenAI-compatible servers may ignore unknown fields). */
+export type ChatCompletionRequestOptions = {
+    /** When false, request at most one tool call per assistant message (OpenAI `parallel_tool_calls: false`). */
+    parallelToolCalls?: boolean;
+};
+
 export function chatCompletion(
     messages: ChatMessage[],
     tools: object[],
-    config: LlmAdapterConfig
+    config: LlmAdapterConfig,
+    requestOptions?: ChatCompletionRequestOptions
 ): Promise<ChatCompletionResult> {
     if (config.backend === "anthropic") {
         return anthropicChatCompletion(messages, tools, config);
     }
-    return openAICompatChatCompletion(messages, tools, config);
+    return openAICompatChatCompletion(messages, tools, config, requestOptions);
 }
 
 /* ---------- OpenAI-compatible ---------- */
@@ -494,7 +501,8 @@ function parseBaseUrl(baseUrl: string): { hostname: string; port: number; pathPr
 function openAICompatChatCompletion(
     messages: ChatMessage[],
     tools: object[],
-    config: { backend: "openai"; baseUrl: string; apiKey?: string; model: string }
+    config: { backend: "openai"; baseUrl: string; apiKey?: string; model: string },
+    requestOptions?: ChatCompletionRequestOptions
 ): Promise<ChatCompletionResult> {
     return new Promise((resolve, reject) => {
         const { hostname, port, pathPrefix, useHttps } = parseBaseUrl(config.baseUrl);
@@ -508,6 +516,9 @@ function openAICompatChatCompletion(
         };
         if (tools.length > 0) {
             body.tools = toolsToOpenAI(tools);
+        }
+        if (requestOptions?.parallelToolCalls === false) {
+            body.parallel_tool_calls = false;
         }
 
         const bodyStr = JSON.stringify(body);

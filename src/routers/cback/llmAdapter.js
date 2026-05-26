@@ -90,11 +90,11 @@ function resolveLlmFromEnv() {
 }
 /* ---------- public API ---------- */
 const DEFAULT_ANTHROPIC_VERSION = "2023-06-01";
-function chatCompletion(messages, tools, config) {
+function chatCompletion(messages, tools, config, requestOptions) {
     if (config.backend === "anthropic") {
         return anthropicChatCompletion(messages, tools, config);
     }
-    return openAICompatChatCompletion(messages, tools, config);
+    return openAICompatChatCompletion(messages, tools, config, requestOptions);
 }
 /* ---------- OpenAI-compatible ---------- */
 function messagesToOpenAI(messages) {
@@ -454,7 +454,7 @@ function parseBaseUrl(baseUrl) {
         useHttps: u.protocol === "https:",
     };
 }
-function openAICompatChatCompletion(messages, tools, config) {
+function openAICompatChatCompletion(messages, tools, config, requestOptions) {
     return new Promise((resolve, reject) => {
         const { hostname, port, pathPrefix, useHttps } = parseBaseUrl(config.baseUrl);
         const path = pathPrefix + "/chat/completions";
@@ -466,6 +466,9 @@ function openAICompatChatCompletion(messages, tools, config) {
         };
         if (tools.length > 0) {
             body.tools = toolsToOpenAI(tools);
+        }
+        if ((requestOptions === null || requestOptions === void 0 ? void 0 : requestOptions.parallelToolCalls) === false) {
+            body.parallel_tool_calls = false;
         }
         const bodyStr = JSON.stringify(body);
         const openaiUrl = (useHttps ? "https://" : "http://") + hostname + (port ? `:${port}` : "") + path;

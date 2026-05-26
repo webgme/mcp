@@ -17,15 +17,17 @@ export const patchMetaDescriptor: Tool = {
             "Apply JSON Patch to the metamodel descriptor (map-based, names only). " +
             "Rules: domain-named main container (not Diagram); contains lists nodes and connection types; " +
             "each link type needs concepts.{Name}={} and relationships.{Name}={from,to}. No attributes.name. " +
-            "Prefer one patch with all concepts, contains, and relationships. " +
-            "After success, tell the user what they can model in plain language — do not describe patch paths or descriptor layout.",
+            "Use **one** patchMetaDescriptor call per user turn with every op in `patch` (never multiple tool calls — one commit). " +
+            "Paths: /concepts/{Name}, /concepts/{Container}/contains/{Child}, /relationships/{Link}. " +
+            "FSM example: add State, Transition, StateMachine with {\"contains\":{\"State\":\"*\",\"Transition\":\"*\"}}, then relationships.Transition {from,to} State. " +
+            "After ok, summarize for the user in plain language — do not call the tool again.",
         parameters: {
             type: "object",
             properties: {
                 patch: {
                     type: "array",
                     description:
-                        "JSON Patch operations. Example: [{\"op\":\"add\",\"path\":\"/concepts/State\",\"value\":{}},{\"op\":\"add\",\"path\":\"/relationships/Transition\",\"value\":{\"from\":\"State\",\"to\":\"State\"}}]",
+                        "JSON Patch operations. Example FSM: [{\"op\":\"add\",\"path\":\"/concepts/State\",\"value\":{}},{\"op\":\"add\",\"path\":\"/concepts/Transition\",\"value\":{}},{\"op\":\"add\",\"path\":\"/concepts/StateMachine\",\"value\":{\"contains\":{\"State\":\"*\",\"Transition\":\"*\"}}},{\"op\":\"add\",\"path\":\"/relationships/Transition\",\"value\":{\"from\":\"State\",\"to\":\"State\"}}]",
                     items: {
                         type: "object",
                         properties: {
@@ -72,7 +74,13 @@ export const patchMetaDescriptor: Tool = {
                     " warnings=" +
                     result.warnings.length
             );
-            const data: { ok: boolean; warnings?: string[]; error?: string } = { ok: true };
+            const data: {
+                ok: boolean;
+                warnings?: string[];
+                applied?: string[];
+                error?: string;
+            } = { ok: true };
+            if (result.applied.length) data.applied = result.applied;
             if (result.warnings.length) data.warnings = result.warnings;
             return { data };
         } catch (e: any) {

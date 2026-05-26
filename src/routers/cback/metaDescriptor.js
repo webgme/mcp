@@ -15,6 +15,7 @@ exports.getConcept = getConcept;
 exports.iterConcepts = iterConcepts;
 exports.buildConceptRegistryFromObjectList = buildConceptRegistryFromObjectList;
 exports.buildConceptRegistryFromCore = buildConceptRegistryFromCore;
+exports.normalizeMetaPatchOps = normalizeMetaPatchOps;
 exports.applyJsonPatch = applyJsonPatch;
 exports.buildMetaDescriptorFromCore = buildMetaDescriptorFromCore;
 exports.buildObjectListFromCore = buildObjectListFromCore;
@@ -310,6 +311,53 @@ function removeAtPointer(root, path) {
         return;
     }
     delete cur[last];
+}
+const PATCH_ROOT_KEYS = new Set(["concepts", "relationships", "version"]);
+/**
+ * Fix common LLM path mistakes before apply (e.g. /StateMachine/contains/State → /concepts/StateMachine/contains/State).
+ */
+function normalizeMetaPatchOps(patch) {
+    const rewrites = [];
+    const out = [];
+    for (const op of patch) {
+        if (!op || typeof op.path !== "string") {
+            out.push(op);
+            continue;
+        }
+        let path = op.path;
+        const containShorthand = /^\/([^/]+)\/contains\/([^/]+)$/.exec(path);
+        if (containShorthand) {
+            const head = containShorthand[1];
+            if (!PATCH_ROOT_KEYS.has(head)) {
+                const fixed = "/concepts/" + head + "/contains/" + containShorthand[2];
+                rewrites.push(path + " → " + fixed);
+                path = fixed;
+            }
+        }
+        if ((op.op === "add" || op.op === "replace") &&
+            /^\/[A-Za-z][A-Za-z0-9_]*$/.test(path)) {
+            const name = path.slice(1);
+            if (!PATCH_ROOT_KEYS.has(name)) {
+                const fixed = "/concepts/" + name;
+                rewrites.push(path + " → " + fixed);
+                path = fixed;
+            }
+        }
+        out.push({ ...op, path });
+    }
+    return { patch: out, rewrites };
+}
+/** Turn replace into add when the target path is missing (common after partial applies). */
+function coerceReplaceToAdd(document, patch) {
+    const coerced = [];
+    const out = patch.map((op) => {
+        if (op.op === "replace" && getAtPointer(document, op.path) === undefined) {
+            coerced.push("replace → add at " + op.path);
+            return { ...op, op: "add" };
+        }
+        return op;
+    });
+    return { patch: out, coerced };
 }
 /** RFC 6902 subset; normalizes to map-based descriptor after apply. */
 function applyJsonPatch(document, patch) {
@@ -647,9 +695,18 @@ function hasMainContainer(descriptor) {
 }
 async function syncMetaDescriptorPatch(core, root, before, patch, commit) {
     const beforeNorm = normalizeMetaDescriptor(before);
-    const after = applyJsonPatch(beforeNorm, patch);
+    const { patch: pathFixed, rewrites } = normalizeMetaPatchOps(patch);
+    const { patch: coercedPatch, coerced } = coerceReplaceToAdd(beforeNorm, pathFixed);
+    const after = applyJsonPatch(beforeNorm, coercedPatch);
     const applied = [];
     const warnings = [];
+    if (rewrites.length) {
+        warnings.push("Patch paths were corrected server-side (always use /concepts/Name and /concepts/Container/contains/Child): " +
+            rewrites.join("; "));
+    }
+    if (coerced.length) {
+        warnings.push("Replace operations coerced to add where missing: " + coerced.join("; "));
+    }
     const normExtra = after._normalizeWarnings;
     if (normExtra)
         warnings.push(...normExtra);

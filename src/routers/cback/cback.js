@@ -14,13 +14,15 @@ const SYSTEM_PROMPT_BASE = "You are GMEBot, an assistant embedded in a WebGME mo
     "The client sends modelingMode, a MetaDescriptor snapshot, and a concept registry (existing / new / deleted names). " +
     "Do not ask to fetch the metamodel first — it is already in context. " +
     "In metamodel mode the only tool is patchMetaDescriptor: apply RFC 6902 JSON Patch to the MetaDescriptor (see docs/schemas/meta-descriptor.schema.json). " +
-    "MetaDescriptor uses **objects keyed by name**, not arrays: patch /concepts/State, /concepts/StateMachine/contains/State, /relationships/Transition. " +
-    "Never put cardinality in concept names (wrong: concepts.State:*; right: concepts.State and StateMachine.contains.State = \"*\"). " +
+    "Use **exactly one** patchMetaDescriptor call per user turn: put every op in that call's `patch` array (order matters). Do not split one edit across several tool calls — one call keeps undo/redo and commits clean. " +
+    "MetaDescriptor uses **objects keyed by name**, not arrays. Paths must start with /concepts/ or /relationships/ — never /StateMachine/contains/State (wrong). " +
+    "Example finite-state machine (one patch, one commit): add concepts State, Transition, StateMachine; StateMachine value must include contains listing State and Transition; add relationships.Transition from State to State. " +
+    "Never put cardinality in concept names (wrong: concepts.State:*; right: /concepts/StateMachine/contains/State = \"*\" or contains map on the StateMachine concept body). " +
     "Never add attributes.name — the name attribute is inherited from FCO. " +
     "Metamodel structure: (1) **main container** named for the domain (StateMachine, not Diagram) — contains must list **both** node types and **connection** types (Transition, etc.) so they can be instantiated; " +
     "(2) each link type as concepts.{Name} = {} (empty = FCO) plus relationships.{Name} = { from, to }; " +
     "(3) other node concepts as needed. Never use Diagram, ConnectionName, or Connector as concept names. " +
-    "Prefer one patch with all concepts, main container contains, and relationships. " +
+    "Prefer one patch with all concepts, main container contains, and relationships. After patchMetaDescriptor returns ok, reply to the user — do not call the tool again in the same turn. " +
     "Omit extends when a concept extends FCO (use \"FCO\" only in contains/pointers/relationship ends when needed). " +
     "**User-facing replies (metamodel):** After patchMetaDescriptor, summarize what the user can now model — type names, what goes inside the main container, how links work — in everyday modeling language. " +
     "Do not walk the user through MetaDescriptor, JSON Patch, contains maps, relationships blocks, FCO, cardinality, or tool results unless they ask for technical detail. " +
@@ -63,6 +65,9 @@ function toolResultContentForHistory(toolName, toolResult) {
             return JSON.stringify({ ok: false, error: toolResult.error || "patch failed" });
         }
         const out = { ok: true };
+        if (Array.isArray(toolResult === null || toolResult === void 0 ? void 0 : toolResult.applied) && toolResult.applied.length) {
+            out.applied = toolResult.applied;
+        }
         if (Array.isArray(toolResult === null || toolResult === void 0 ? void 0 : toolResult.warnings) && toolResult.warnings.length) {
             out.warnings = toolResult.warnings;
         }
@@ -72,6 +77,20 @@ function toolResultContentForHistory(toolName, toolResult) {
     return raw.length <= MAX_TOOL_RESULT_CHARS
         ? raw
         : raw.substring(0, MAX_TOOL_RESULT_CHARS) + " [truncated]";
+}
+/** Metamodel: patch applied without hard failure (warnings are ok). */
+function metamodelPatchSucceededInRound(toolResults) {
+    for (const tr of toolResults) {
+        try {
+            const data = JSON.parse(tr.content);
+            if (data && data.ok === true)
+                return true;
+        }
+        catch {
+            /* ignore */
+        }
+    }
+    return false;
 }
 function toolRoundMadeProgress(toolResults) {
     for (const tr of toolResults) {
@@ -86,6 +105,42 @@ function toolRoundMadeProgress(toolResults) {
         }
     }
     return false;
+}
+function parseToolCallArguments(call) {
+    var _a;
+    const rawArgs = (_a = call === null || call === void 0 ? void 0 : call.function) === null || _a === void 0 ? void 0 : _a.arguments;
+    let args = {};
+    if (typeof rawArgs === "string") {
+        try {
+            args = JSON.parse(rawArgs);
+        }
+        catch {
+            args = {};
+        }
+    }
+    else if (rawArgs && typeof rawArgs === "object") {
+        args = rawArgs;
+    }
+    return args;
+}
+/**
+ * If the model emitted several patchMetaDescriptor calls in one assistant message, merge
+ * all `patch` arrays (order preserved) and apply once so the project gets one commit.
+ */
+function mergePatchMetaDescriptorToolCalls(toolCalls) {
+    if (!Array.isArray(toolCalls) || toolCalls.length <= 1)
+        return null;
+    const allPatch = toolCalls.every((c) => { var _a; return ((_a = c === null || c === void 0 ? void 0 : c.function) === null || _a === void 0 ? void 0 : _a.name) === "patchMetaDescriptor"; });
+    if (!allPatch)
+        return null;
+    const patch = [];
+    for (const call of toolCalls) {
+        const args = parseToolCallArguments(call);
+        if (Array.isArray(args.patch)) {
+            patch.push(...args.patch);
+        }
+    }
+    return { mergedArgs: { patch }, callCount: toolCalls.length };
 }
 /** Match only when "project" is explicitly mentioned — avoid matching "switch to the diagram" etc. */
 const SWITCH_PROJECT_PATTERN = /\b(switch|open|go to|change to|load)\s+(?:to\s+)?project\b|(?:switch|open)\s+project\b|\bswitchProject\b/i;
@@ -469,7 +524,7 @@ function initialize(middlewareOpts) {
                 rounds++;
                 logLlmRequest(logger, rounds);
                 logLlmRequestDebug(logger, rounds, history.length);
-                const completionPromise = (0, llmAdapter_1.chatCompletion)(history, toolDefs, llmAdapterConfig);
+                const completionPromise = (0, llmAdapter_1.chatCompletion)(history, toolDefs, llmAdapterConfig, mode === "metamodel" ? { parallelToolCalls: false } : undefined);
                 const timeoutMessage = "LLM request timed out after " + (llmRequestTimeoutMs / 1000) + "s.";
                 const result = await withTimeout(completionPromise, llmRequestTimeoutMs, timeoutMessage);
                 const msg = result.message;
@@ -528,33 +583,68 @@ function initialize(middlewareOpts) {
                 }
                 const toolResultsThisRound = [];
                 let needClientDataKey = null;
-                for (const call of msg.tool_calls) {
-                    const rawArgs = call.function.arguments;
-                    let args = {};
-                    if (typeof rawArgs === "string") {
+                const patchBatch = mergePatchMetaDescriptorToolCalls(msg.tool_calls);
+                let batchedPatchResult = null;
+                if (patchBatch && (0, toolRegistry_1.isToolEnabled)("patchMetaDescriptor", toolCtx.context)) {
+                    const batchHandler = toolMap.get("patchMetaDescriptor");
+                    if (batchHandler) {
+                        logger.info("patchMetaDescriptor batch: merging " +
+                            patchBatch.callCount +
+                            " tool calls into one apply (" +
+                            patchBatch.mergedArgs.patch.length +
+                            " ops)");
+                        logToolCall(logger, "patchMetaDescriptor", { ...patchBatch.mergedArgs, _batchedFrom: patchBatch.callCount }, { toolCallId: "batched" });
+                        logToolCallDebug(logger, "patchMetaDescriptor", patchBatch.mergedArgs, toolCtx);
                         try {
-                            args = JSON.parse(rawArgs);
+                            batchedPatchResult = await batchHandler(patchBatch.mergedArgs, toolCtx);
+                            toolsUsedThisChat = true;
+                            if (batchedPatchResult.commands) {
+                                commands.push(...batchedPatchResult.commands);
+                            }
+                            const tr = batchedPatchResult.data;
+                            if (tr && typeof tr.needClientData === "string" &&
+                                tr.needClientData === toolRegistry_1.NEED_CLIENT_DATA_KEYS.diagramLayout) {
+                                needClientDataKey = tr.needClientData;
+                            }
+                            logToolResponse(logger, "patchMetaDescriptor", tr);
+                            logToolResponseDebug(logger, "patchMetaDescriptor", tr);
                         }
-                        catch (parseErr) {
-                            logger.warn("tool_call " + call.function.name + " invalid JSON: " + parseErr.message);
-                            logger.debug("tool_call " + call.function.name + " raw args: " + String(rawArgs).slice(0, 200));
-                            args = {};
+                        catch (err) {
+                            logToolResponse(logger, "patchMetaDescriptor", {}, err);
+                            logger.debug("tool_response patchMetaDescriptor error stack: " + (err.stack || ""));
+                            batchedPatchResult = { data: { error: err.message } };
                         }
                     }
-                    else if (rawArgs && typeof rawArgs === "object") {
-                        args = rawArgs;
+                    else {
+                        batchedPatchResult = {
+                            data: { error: "patchMetaDescriptor handler not registered (internal error)." },
+                        };
+                    }
+                }
+                for (const call of msg.tool_calls) {
+                    const args = parseToolCallArguments(call);
+                    if (patchBatch && call.function.name === "patchMetaDescriptor" && batchedPatchResult) {
+                        const toolResult = {
+                            ...batchedPatchResult.data,
+                            batchedToolCalls: patchBatch.callCount,
+                        };
+                        toolResultsThisRound.push({
+                            content: toolResultContentForHistory(call.function.name, toolResult),
+                            tool_call_id: call.id,
+                        });
+                        continue;
                     }
                     logToolCall(logger, call.function.name, args, { toolCallId: call.id });
                     logToolCallDebug(logger, call.function.name, args, toolCtx);
                     const handler = toolMap.get(call.function.name);
                     let toolResult;
                     if (!(0, toolRegistry_1.isToolEnabled)(call.function.name, toolCtx.context)) {
-                        const mode = (0, toolRegistry_1.resolveModelingMode)(toolCtx.context);
+                        const modeNow = (0, toolRegistry_1.resolveModelingMode)(toolCtx.context);
                         toolResult = {
                             error: "Tool '" +
                                 call.function.name +
                                 "' is not available in " +
-                                mode +
+                                modeNow +
                                 " mode. Use patchMetaDescriptor in metamodel mode.",
                         };
                         logToolResponse(logger, call.function.name, toolResult);
@@ -613,6 +703,21 @@ function initialize(middlewareOpts) {
                     lastRoundFingerprint = null;
                 }
                 refreshSystemMessage(history, toolCtx);
+                if (mode === "metamodel" && metamodelPatchSucceededInRound(toolResultsThisRound)) {
+                    logger.info("llm_request metamodel_final_reply after successful patch");
+                    const finalResult = await withTimeout((0, llmAdapter_1.chatCompletion)(history, [], llmAdapterConfig, undefined), llmRequestTimeoutMs, "LLM request timed out after " + (llmRequestTimeoutMs / 1000) + "s.");
+                    const finalMsg = finalResult.message;
+                    history.push(finalMsg);
+                    logLlmResponse(logger, rounds, finalMsg);
+                    logLlmResponseDebug(logger, rounds, finalMsg);
+                    res.json(buildChatResponse({
+                        content: finalMsg.content,
+                        toolsUsed: toolsUsedThisChat,
+                        commands,
+                        usage: finalResult.usage,
+                    }));
+                    return;
+                }
             }
             logger.warn("chat max_rounds userId=" + userId + " rounds=" + maxToolRounds);
             res.json({

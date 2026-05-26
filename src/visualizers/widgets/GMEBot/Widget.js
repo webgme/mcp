@@ -215,8 +215,19 @@ define(["jquery", "./commands"], function ($, Commands) {
             padding: 0;
         }
         .gme-bot-message ul, .gme-bot-message ol {
+            margin: 4px 0 8px 0;
+            padding-left: 1.4em;
+            list-style-position: outside;
+        }
+        .gme-bot-message ul {
+            list-style-type: disc;
+        }
+        .gme-bot-message ol {
+            list-style-type: decimal;
+        }
+        .gme-bot-message li {
+            display: list-item;
             margin: 2px 0;
-            padding-left: 20px;
         }
         .gme-bot-context-bar {
             flex-shrink: 0;
@@ -330,31 +341,63 @@ define(["jquery", "./commands"], function ($, Commands) {
         }
         return "(no response)";
     }
+    /** Group consecutive markdown list lines into a single ul/ol (blank lines between items are tolerated). */
+    function renderListBlocks(text) {
+        const lines = text.split("\n");
+        const out = [];
+        let i = 0;
+        while (i < lines.length) {
+            const ulMatch = lines[i].match(/^\s*[-*] (.+)$/);
+            const olMatch = lines[i].match(/^\s*\d+\. (.+)$/);
+            if (!ulMatch && !olMatch) {
+                out.push(lines[i]);
+                i++;
+                continue;
+            }
+            const tag = ulMatch ? "ul" : "ol";
+            const itemRe = tag === "ul" ? /^\s*[-*] (.+)$/ : /^\s*\d+\. (.+)$/;
+            const items = [];
+            while (i < lines.length) {
+                if (lines[i].trim() === "") {
+                    if (i + 1 < lines.length && itemRe.test(lines[i + 1])) {
+                        i++;
+                        continue;
+                    }
+                    break;
+                }
+                const m = lines[i].match(itemRe);
+                if (!m) {
+                    break;
+                }
+                items.push("<li>" + m[1] + "</li>");
+                i++;
+            }
+            out.push("<" + tag + ">" + items.join("") + "</" + tag + ">");
+        }
+        return out.join("\n");
+    }
     function renderMarkdown(text) {
         let html = escapeHtml(text);
         // Code blocks: ```...```
         html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_m, _lang, code) => "<pre><code>" + code.trim() + "</code></pre>");
+        html = renderListBlocks(html);
         // Inline code: `...`
         html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
         // Bold: **...**
         html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-        // Italic: *...*
-        html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
-        // Unordered list items: lines starting with - or *
-        html = html.replace(/^[\-\*] (.+)$/gm, "<li>$1</li>");
-        html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, "<ul>$1</ul>");
-        // Ordered list items: lines starting with 1. 2. etc.
-        html = html.replace(/^\d+\. (.+)$/gm, "<li>$1</li>");
-        html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, (match) => match.includes("<ul>") ? match : "<ol>" + match + "</ol>");
+        // Italic: *...* (not list markers; list lines are already wrapped)
+        html = html.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
         // Line breaks (outside of pre blocks)
         html = html.replace(/\n/g, "<br>");
-        // Clean up <br> inside <ul>/<ol>
+        // Clean up <br> around lists
         html = html.replace(/<br><li>/g, "<li>");
         html = html.replace(/<\/li><br>/g, "</li>");
         html = html.replace(/<br><\/ul>/g, "</ul>");
         html = html.replace(/<br><\/ol>/g, "</ol>");
         html = html.replace(/<ul><br>/g, "<ul>");
         html = html.replace(/<ol><br>/g, "<ol>");
+        html = html.replace(/<\/ul><br>/g, "</ul>");
+        html = html.replace(/<\/ol><br>/g, "</ol>");
         return html;
     }
     class Widget {
