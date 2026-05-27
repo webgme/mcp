@@ -3,7 +3,7 @@
     "target": "ES2019",
     "module": "commonjs",
     "moduleResolution": "node",
-    "outDir": "../../src/routers/cback",
+    "outDir": "../../dist/routers/cback",
     "rootDir": "src",
     "esModuleInterop": true,
     "skipLibCheck": true,

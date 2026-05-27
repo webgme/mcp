@@ -7,22 +7,24 @@ This project uses npm workspaces (`packages/*`) and `webgme-cli` as the source o
 - Always create/import/remove components via `webgme-cli` commands.
 - Do not hand-edit `webgme-setup.json` or `config/config.webgme.js` (both are CLI-managed).
 - Components implemented by this project go under `components` (not `dependencies`).
-- Prefer TypeScript for authored code; build output goes to the standard `src/` paths that WebGME expects.
+- Prefer TypeScript for authored code; build output goes to **`dist/`** (not mixed into `src/`).
 
 ## TypeScript Strategy
 
-Each component has a workspace package under `packages/` that holds the TypeScript source. The `tsconfig.json` in each package compiles directly into the standard WebGME directory structure under the root `src/` tree.
+Each component has a workspace package under `packages/` that holds the TypeScript source. The `tsconfig.json` in each package compiles into **`dist/`** at the repo root:
 
-- **Routers**: `packages/<id>/src/<id>.ts` → `src/routers/<id>/<id>.js`
-- **Widgets**: `packages/<name>/src/Widget.ts` → `src/visualizers/widgets/<Name>/Widget.js`
+- **Routers**: `packages/<id>/src/` → `dist/routers/<id>/`
+- **Widgets (footer TS)**: `packages/<name>/src/` → `dist/visualizers/widgets/<Name>/`
 
-This way `webgme-setup.json` and `config/config.webgme.js` reference standard paths and require no manual overrides.
+Hand-authored WebGME assets (panels, styles, generated stubs) remain under **`src/visualizers/`**. `webgme-setup.json` points the cback router at `dist/routers/cback`. The footer GMEBot widget module is mapped in `config.default.js` (`requirejsPaths['widgets/GMEBot/Widget']` → `./dist/...`).
+
+Run **`npm run build`** before **`npm start`** or tests — `dist/` is gitignored.
 
 ## Current Router: cback
 
 - Registered as: `components.routers.cback`
 - TypeScript source: `packages/cback/src/cback.ts`
-- Compiled output: `src/routers/cback/cback.js`
+- Compiled output: `dist/routers/cback/cback.js`
 - Mounted at: `/cback`
 - Test endpoint: `GET /cback/test`
 
@@ -30,7 +32,7 @@ This way `webgme-setup.json` and `config/config.webgme.js` reference standard pa
 
 - Registered as: `components.visualizers.GMEBot`
 - TypeScript source: `packages/gmebot/src/Widget.ts`
-- Compiled output: `src/visualizers/widgets/GMEBot/Widget.js` (AMD)
+- Compiled output: `dist/visualizers/widgets/GMEBot/Widget.js` (AMD)
 - Footer widget path: `widgets/GMEBot/Widget`
 - Footer binding: `config/components.json` → `GenericUIFooterControlsPanel.extraWidgets`
 
@@ -52,9 +54,9 @@ This way `webgme-setup.json` and `config/config.webgme.js` reference standard pa
 ## Adding a New Component
 
 1. Create with `webgme-cli` (e.g. `npx webgme-cli new router myrouter`)
-2. Create a workspace package under `packages/<name>/` with `tsconfig.json` pointing `outDir` to the standard `src/` path
+2. Create a workspace package under `packages/<name>/` with `tsconfig.json` pointing `outDir` to the matching path under **`dist/`**
 3. Write TypeScript source in `packages/<name>/src/`
-4. Run `npm run build` — compiled JS appears where WebGME expects it
+4. Run `npm run build` — compiled JS appears under **`dist/`**
 
 ## Implementation Notes
 

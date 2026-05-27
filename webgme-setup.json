@@ -6,7 +6,7 @@
     "plugins": {},
     "routers": {
       "cback": {
-        "src": "src/routers/cback",
+        "src": "dist/routers/cback",
         "test": "test/routers/cback",
         "mount": "cback"
       }

@@ -5,7 +5,7 @@
   "description": "WebGME cback router package.",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "clean": "node -e \"require('fs').rmSync('../../src/routers/cback/cback.js',{force:true})\""
+    "clean": "node -e \"require('fs').rmSync('../../dist/routers/cback',{recursive:true,force:true})\""
   },
   "devDependencies": {
     "@types/express": "^5.0.3",

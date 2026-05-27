@@ -14,7 +14,7 @@ config.visualization.panelPaths.push(__dirname + '/../src/visualizers/panels');
 
 
 config.rest.components['cback'] = {
-  src: __dirname + '/../src/routers/cback/cback.js',
+  src: __dirname + '/../dist/routers/cback/cback.js',
   mount: 'cback',
   options: {}
 };

@@ -31,7 +31,7 @@ WebGME app with monorepo-managed extension packages.
 
 ## Monorepo Workflow
 
-This repository uses npm workspaces (`packages/*`). Each component has a TypeScript source package that compiles directly into the standard `src/` paths WebGME expects. Components are registered via `webgme-cli`.
+This repository uses npm workspaces (`packages/*`). TypeScript packages compile to **`dist/`**; hand-authored WebGME UI assets stay in **`src/`**. Components are registered via `webgme-cli`.
 
 ### Useful commands
 
@@ -49,10 +49,10 @@ This repository uses npm workspaces (`packages/*`). Each component has a TypeScr
 
 - `webgme-cback` (`packages/cback`)
   - TypeScript router package
-  - Source: `src/cback.ts` → compiles to `src/routers/cback/cback.js`
+  - Source: `packages/cback/src/` → compiles to `dist/routers/cback/`
 - `webgme-gmebot` (`packages/gmebot`)
   - TypeScript widget package
-  - Source: `src/Widget.ts` → compiles to `src/visualizers/widgets/GMEBot/Widget.js` (AMD)
+  - Source: `packages/gmebot/src/` → compiles to `dist/visualizers/widgets/GMEBot/` (AMD)
   - Added to footer via `config/components.json` (`GenericUIFooterControlsPanel.extraWidgets`)
 
 ## Footer Widget Configuration

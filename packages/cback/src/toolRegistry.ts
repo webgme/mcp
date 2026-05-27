@@ -134,7 +134,7 @@ import { BRANCH_TOOLS } from "./tools/branch";
 import { META_TOOLS } from "./tools/meta";
 import { NODE_TOOLS } from "./tools/node";
 import { getStateTools } from "./tools/state";
-import { META_PATCH_TOOLS } from "./tools/metaPatch";
+import { META_PATCH_TOOLS, META_DESCRIPTOR_READ_TOOLS } from "./tools/metaPatch";
 
 /** Visualizer ids that represent the Meta Editor (meta modeling). */
 const META_VISUALIZER_IDS = ["METAAspect"];
@@ -178,6 +178,9 @@ export function getToolMap(gmeConfig?: any): Map<string, ToolHandler> {
         map.set(t.definition.name, t.handler);
     }
     for (const t of META_PATCH_TOOLS) {
+        map.set(t.definition.name, t.handler);
+    }
+    for (const t of META_DESCRIPTOR_READ_TOOLS) {
         map.set(t.definition.name, t.handler);
     }
     return map;

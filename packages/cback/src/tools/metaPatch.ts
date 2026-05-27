@@ -10,6 +10,34 @@ function ensureCoreSession(ctx: any) {
     }
 }
 
+function ensureCoreSessionForRead(ctx: any) {
+    if (!ctx.coreSession) {
+        throw new Error(
+            "getMetaDescriptor requires an open project. Send projectId in context."
+        );
+    }
+}
+
+/** Read-only; registered for run-tool/tests, not exposed to the LLM. */
+export const getMetaDescriptor: Tool = {
+    definition: {
+        name: "getMetaDescriptor",
+        description:
+            "Return the canonical MetaDescriptor document for the open project (map-based, version 1). " +
+            "For tests and debugging — not used by the LLM in chat.",
+        parameters: {
+            type: "object",
+            properties: {},
+            required: [],
+        },
+    },
+    handler: async (_args, ctx) => {
+        ensureCoreSessionForRead(ctx);
+        const { core, root } = ctx.coreSession;
+        return { data: buildMetaDescriptorFromCore(core, root) };
+    },
+};
+
 export const patchMetaDescriptor: Tool = {
     definition: {
         name: "patchMetaDescriptor",
@@ -92,3 +120,6 @@ export const patchMetaDescriptor: Tool = {
 
 /** Sole meta tool exposed while drilling down metamodeling UX. */
 export const META_PATCH_TOOLS: Tool[] = [patchMetaDescriptor];
+
+/** Read-back of canonical MetaDescriptor (run-tool / tests only). */
+export const META_DESCRIPTOR_READ_TOOLS: Tool[] = [getMetaDescriptor];

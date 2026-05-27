@@ -5,7 +5,7 @@
   "description": "WebGME GMEBot widget package.",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "clean": "node -e \"require('fs').rmSync('../../src/visualizers/widgets/GMEBot/Widget.js',{force:true})\""
+    "clean": "node -e \"require('fs').rmSync('../../dist/visualizers/widgets/GMEBot',{recursive:true,force:true})\""
   },
   "devDependencies": {
     "typescript": "^5.9.2"

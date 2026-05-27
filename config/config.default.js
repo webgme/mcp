@@ -31,4 +31,9 @@ config.server.log = {
 };
 
 validateConfig(config);
+
+// TypeScript build output (packages/*/ → dist/). Hand-authored WebGME assets stay under src/.
+config.requirejsPaths = config.requirejsPaths || {};
+config.requirejsPaths['widgets/GMEBot/Widget'] = './dist/visualizers/widgets/GMEBot/Widget';
+
 module.exports = config;

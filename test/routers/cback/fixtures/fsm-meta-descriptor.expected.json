@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concepts": {
+    "State": {},
+    "StateMachine": {
+      "contains": {
+        "State": "*",
+        "Transition": "*"
+      }
+    },
+    "Transition": {}
+  },
+  "relationships": {
+    "Transition": {
+      "from": "State",
+      "to": "State"
+    }
+  }
+}

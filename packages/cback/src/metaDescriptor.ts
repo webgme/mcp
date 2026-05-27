@@ -136,7 +136,76 @@ function migrateConceptBody(body: unknown): MetaConceptBody {
     delete (b as { name?: string }).name;
     if (b.contains) b.contains = migrateContainsToMap(b.contains);
     sanitizeConceptBodyAttributes(b);
-    return b;
+    return canonicalizeConceptBody(b);
+}
+
+const LOCALE = "en";
+
+/** Sort, dedupe, and collapse singleton concept-name lists (typeRefOrList). */
+export function canonicalizeTypeRefOrList(value: unknown): string | string[] | undefined {
+    if (value == null) return undefined;
+    if (typeof value === "string") {
+        const s = value.trim();
+        return s.length ? s : undefined;
+    }
+    if (!Array.isArray(value)) return undefined;
+    const unique = new Set<string>();
+    for (const item of value) {
+        if (typeof item !== "string") continue;
+        const s = item.trim();
+        if (s) unique.add(s);
+    }
+    if (!unique.size) return undefined;
+    const sorted = [...unique].sort((a, b) => a.localeCompare(b, LOCALE));
+    return sorted.length === 1 ? sorted[0] : sorted;
+}
+
+function canonicalizeAttributeDef(def: unknown): unknown {
+    if (typeof def === "string") return def;
+    if (!def || typeof def !== "object") return def;
+    const o = { ...(def as Record<string, unknown>) };
+    if (Array.isArray(o.values)) {
+        const unique = new Set<string>();
+        for (const item of o.values) {
+            if (typeof item === "string") {
+                const s = item.trim();
+                if (s) unique.add(s);
+            }
+        }
+        if (unique.size) {
+            o.values = [...unique].sort((a, b) => a.localeCompare(b, LOCALE));
+        }
+    }
+    return o;
+}
+
+function canonicalizeConceptBody(body: MetaConceptBody): MetaConceptBody {
+    const out: MetaConceptBody = { ...body };
+    if (out.pointers) {
+        const ptrs: Record<string, string | string[]> = {};
+        for (const key of Object.keys(out.pointers).sort((a, b) => a.localeCompare(b, LOCALE))) {
+            const canon = canonicalizeTypeRefOrList(out.pointers[key]);
+            if (canon !== undefined) ptrs[key] = canon;
+        }
+        out.pointers = Object.keys(ptrs).length ? ptrs : undefined;
+    }
+    if (out.attributes) {
+        const attrs: Record<string, unknown> = {};
+        for (const key of Object.keys(out.attributes).sort((a, b) => a.localeCompare(b, LOCALE))) {
+            attrs[key] = canonicalizeAttributeDef(out.attributes[key]);
+        }
+        out.attributes = attrs;
+    }
+    return out;
+}
+
+function canonicalizeRelationshipBody(rel: MetaRelationshipBody): MetaRelationshipBody {
+    const from = canonicalizeTypeRefOrList(rel.from);
+    const to = canonicalizeTypeRefOrList(rel.to);
+    if (from === undefined || to === undefined) {
+        throw new Error("relationship requires canonical from and to");
+    }
+    return { from, to };
 }
 
 /** Accept v1 map form or legacy array form; always return map-based descriptor. */
@@ -179,12 +248,18 @@ export function normalizeMetaDescriptor(raw: unknown): MetaDescriptor {
                 if (!m) continue;
                 const rname = resolveConceptName(m[1].trim());
                 if (!isValidConceptName(rname.name)) continue;
-                relationships[rname.name] = { from: m[2].trim(), to: m[3].trim() };
+                relationships[rname.name] = canonicalizeRelationshipBody({
+                    from: m[2].trim(),
+                    to: m[3].trim(),
+                });
             } else if (rel && typeof rel === "object" && (rel as MetaRelationshipBody & { name?: string }).name) {
                 const ro = rel as MetaRelationshipBody & { name: string };
                 const rname = resolveConceptName(ro.name);
                 if (!isValidConceptName(rname.name)) continue;
-                relationships[rname.name] = { from: ro.from, to: ro.to };
+                relationships[rname.name] = canonicalizeRelationshipBody({
+                    from: ro.from,
+                    to: ro.to,
+                });
             }
         }
     } else if (rels && typeof rels === "object") {
@@ -193,7 +268,10 @@ export function normalizeMetaDescriptor(raw: unknown): MetaDescriptor {
             if (rname.warning) warnings.push(rname.warning);
             if (!isValidConceptName(rname.name)) continue;
             if (body && typeof body === "object") {
-                relationships[rname.name] = { from: body.from, to: body.to };
+                relationships[rname.name] = canonicalizeRelationshipBody({
+                    from: body.from,
+                    to: body.to,
+                });
             }
         }
     }
@@ -439,20 +517,55 @@ export function applyJsonPatch(document: MetaDescriptor, patch: JsonPatchOp[]): 
     return normalizeMetaDescriptor(doc);
 }
 
-function metaChildrenToContains(children: any): Record<string, Cardinality> | undefined {
+function resolveMetaItemName(
+    item: unknown,
+    pathToName: Record<string, string>
+): string | undefined {
+    if (typeof item === "string") {
+        const trimmed = item.trim();
+        if (!trimmed) return undefined;
+        return pathToName[trimmed] ?? trimmed.split("/").pop();
+    }
+    if (item && typeof item === "object") {
+        const o = item as { name?: string; id?: string };
+        const n = o.name ?? o.id;
+        if (n != null && String(n).trim()) return String(n).trim();
+    }
+    return undefined;
+}
+
+function metaChildrenToContains(
+    children: any,
+    pathToName: Record<string, string>
+): Record<string, Cardinality> | undefined {
     if (!children || !Array.isArray(children.items)) return undefined;
     const out: Record<string, Cardinality> = {};
-    for (const item of children.items) {
-        const name = item?.name ?? item?.id;
+    for (let i = 0; i < children.items.length; i++) {
+        const item = children.items[i];
+        const name = resolveMetaItemName(item, pathToName);
         if (!name) continue;
-        const min = typeof item.min === "number" ? item.min : undefined;
-        const max = typeof item.max === "number" ? item.max : undefined;
+        let min: number | undefined;
+        let max: number | undefined;
+        if (item && typeof item === "object") {
+            const o = item as { min?: number; max?: number };
+            if (typeof o.min === "number") min = o.min;
+            if (typeof o.max === "number") max = o.max;
+        }
+        if (min === undefined && Array.isArray(children.minItems)) {
+            min = children.minItems[i];
+        }
+        if (max === undefined && Array.isArray(children.maxItems)) {
+            max = children.maxItems[i];
+        }
         out[String(name)] = cardinalityFromParsed({ min, max });
     }
     return Object.keys(out).length ? out : undefined;
 }
 
-function metaPointersToRecord(pointers: any): Record<string, string | string[]> | undefined {
+function metaPointersToRecord(
+    pointers: any,
+    pathToName: Record<string, string>
+): Record<string, string | string[]> | undefined {
     if (!pointers || typeof pointers !== "object") return undefined;
     const out: Record<string, string | string[]> = {};
     for (const key of Object.keys(pointers)) {
@@ -460,7 +573,9 @@ function metaPointersToRecord(pointers: any): Record<string, string | string[]> 
         const p = pointers[key];
         const items = p?.items;
         if (!Array.isArray(items)) continue;
-        const names = items.map((it: any) => it?.name ?? it?.id).filter(Boolean);
+        const names = items
+            .map((it: unknown) => resolveMetaItemName(it, pathToName))
+            .filter(Boolean) as string[];
         if (names.length === 1) out[key] = names[0];
         else if (names.length > 1) out[key] = names;
     }
@@ -480,6 +595,14 @@ function baseConceptName(core: any, node: any, root: any): string {
 
 export function buildMetaDescriptorFromCore(core: any, root: any): MetaDescriptor {
     const metaDict = core.getAllMetaNodes(root) || {};
+    const pathToName: Record<string, string> = {};
+    for (const path of Object.keys(metaDict)) {
+        const node = metaDict[path];
+        if (!node) continue;
+        const name = String(core.getAttribute(node, "name") ?? "").trim();
+        if (name) pathToName[path] = name;
+    }
+
     const concepts: Record<string, MetaConceptBody> = {};
     const relationships: Record<string, MetaRelationshipBody> = {};
 
@@ -497,9 +620,9 @@ export function buildMetaDescriptorFromCore(core: any, root: any): MetaDescripto
         const body: MetaConceptBody = {};
         const baseName = baseConceptName(core, node, root);
         if (!isFcoConceptName(baseName)) body.extends = baseName;
-        const contains = metaChildrenToContains(meta.children);
+        const contains = metaChildrenToContains(meta.children, pathToName);
         if (contains) body.contains = contains;
-        const pointers = metaPointersToRecord(meta.pointers);
+        const pointers = metaPointersToRecord(meta.pointers, pathToName);
         if (pointers) body.pointers = pointers;
         if (meta.attributes && typeof meta.attributes === "object") {
             const attrs: Record<string, unknown> = {};
@@ -516,8 +639,12 @@ export function buildMetaDescriptorFromCore(core: any, root: any): MetaDescripto
         if (ptr && (ptr.src || ptr.dst)) {
             const fromItems = ptr.src?.items ?? [];
             const toItems = ptr.dst?.items ?? [];
-            const fromNames = fromItems.map((it: any) => it?.name ?? it?.id).filter(Boolean);
-            const toNames = toItems.map((it: any) => it?.name ?? it?.id).filter(Boolean);
+            const fromNames = fromItems
+                .map((it: unknown) => resolveMetaItemName(it, pathToName))
+                .filter(Boolean) as string[];
+            const toNames = toItems
+                .map((it: unknown) => resolveMetaItemName(it, pathToName))
+                .filter(Boolean) as string[];
             if (fromNames.length && toNames.length) {
                 relationships[name] = {
                     from: fromNames.length === 1 ? fromNames[0] : fromNames,
@@ -530,7 +657,7 @@ export function buildMetaDescriptorFromCore(core: any, root: any): MetaDescripto
 
     const descriptor: MetaDescriptor = { version: 1, concepts };
     if (Object.keys(relationships).length) descriptor.relationships = relationships;
-    return descriptor;
+    return normalizeMetaDescriptor(descriptor);
 }
 
 export function buildObjectListFromCore(
@@ -571,7 +698,9 @@ export type RelationshipSpec = {
 };
 
 function relationshipSpecKey(spec: RelationshipSpec): string {
-    return spec.name + "|" + JSON.stringify(spec.from) + "|" + JSON.stringify(spec.to);
+    const from = canonicalizeTypeRefOrList(spec.from);
+    const to = canonicalizeTypeRefOrList(spec.to);
+    return spec.name + "|" + JSON.stringify(from) + "|" + JSON.stringify(to);
 }
 
 export function collectRelationshipSpecs(descriptor: MetaDescriptor): RelationshipSpec[] {
@@ -592,10 +721,12 @@ export function collectRelationshipSpecs(descriptor: MetaDescriptor): Relationsh
         const src = concept.pointers?.src;
         const dst = concept.pointers?.dst;
         if (src === undefined && dst === undefined) continue;
+        const fromCanon = canonicalizeTypeRefOrList(src === undefined ? [] : src);
+        const toCanon = canonicalizeTypeRefOrList(dst === undefined ? [] : dst);
         push({
             name: concept.name,
-            from: src === undefined ? [] : src,
-            to: dst === undefined ? [] : dst,
+            from: fromCanon === undefined ? [] : fromCanon,
+            to: toCanon === undefined ? [] : toCanon,
         });
     }
     return specs;
